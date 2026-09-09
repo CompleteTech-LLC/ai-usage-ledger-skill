@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""
+run_pipeline.py - one command from raw agent logs to the ledger package.
+
+    python run_pipeline.py --manifest manifest.json
+    python run_pipeline.py --manifest manifest.json --only report,analyze,build   # skip scans
+    python run_pipeline.py --manifest manifest.json --hosts laptop,server         # scan a subset
+
+The manifest (templates/manifest.example.json) lists hosts and where their logs are.
+Host kinds:
+  local   run compile_ai_logs.py here with the given roots
+  wsl     run it inside a WSL distro (wsl.exe -d <distro>); falls back to the \\wsl$ share if the
+          service refuses the call
+  ssh     copy the scanner to the remote with scp, run it with the remote python, scp results back
+  share   scan a mounted/UNC path from this machine (slow but dependable)
+
+Every step is idempotent; outputs land in <workdir>/scans, <workdir>/compiled and <workdir>/reports.
+Standard library only.
+"""
+import argparse
+import hashlib
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+import zipfile
+from datetime import datetime, timezone
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SCANNER = os.path.join(HERE, "compile_ai_logs.py")
+
+
+def log(msg):
+    sys.stderr.write("[%s] %s\n" % (time.strftime("%H:%M:%S"), msg))
+
+
+def run(cmd, check=True, **kw):
+    log("$ " + (cmd if isinstance(cmd, str) else " ".join(shlex.quote(c) for c in cmd)))
+    r = subprocess.run(cmd, shell=isinstance(cmd, str), **kw)
+    if check and r.returncode != 0:
+        raise SystemExit("command failed (%d): %s" % (r.returncode, cmd))
+    return r
+
+
+def scan_args(host):
+    """Translate a manifest host entry into compile_ai_logs.py scan arguments."""
+    args = ["scan", "--host", host["name"]]
+    for r in host.get("claude_roots", []):
+        args += ["--claude-root", r]
+    for r in host.get("codex_roots", []):
+        args += ["--codex-root", r]
+    for r in host.get("copilot_roots", []):
+        args += ["--copilot-root", r]
+    for r in host.get("opencode_dbs", []):
+        args += ["--opencode-db", r]
+    for r in host.get("openclaw_roots", []):
+        args += ["--openclaw-root", r]
+    for key, flag in (("gemini_roots", "--gemini-root"), ("qwen_roots", "--qwen-root"), ("aider_roots", "--aider-root"), ("kimi_roots", "--kimi-root"),
+                      ("vibe_roots", "--vibe-root"), ("continue_roots", "--continue-root"), ("pi_roots", "--pi-root")):
+        for r in host.get(key, []):
+            args += [flag, r]
+    for r in host.get("cline_roots", []):      # "cline=<dir>", "roo-code=<dir>", "kilo-code=<dir>"
+        args += ["--cline-root", r]
+    for r in host.get("generic_roots", []):    # "<tool>=<dir>"
+        args += ["--generic-root", r]
+    return args
+
+
+def scan_host(host, scans_dir, python="python"):
+    kind = host.get("kind", "local")
+    name = host["name"]
+    out_dir = os.path.join(scans_dir, name)
+    os.makedirs(out_dir, exist_ok=True)
+    if kind == "local" or kind == "share":
+        run([host.get("python", python), SCANNER] + scan_args(host) + ["--out-dir", out_dir])
+    elif kind == "wsl":
+        distro = host.get("distro", "Ubuntu")
+        # the scanner and the output dir must be visible from inside the distro
+        win_out = os.path.abspath(out_dir)
+        wsl_out = "/mnt/" + win_out[0].lower() + win_out[2:].replace("\\", "/")
+        wsl_scanner = "/mnt/" + SCANNER[0].lower() + SCANNER[2:].replace("\\", "/")
+        cmd = "%s %s %s --out-dir %s" % (host.get("python", "python3"), shlex.quote(wsl_scanner), " ".join(shlex.quote(x) for x in scan_args(host)), shlex.quote(wsl_out))
+        r = run(["wsl.exe", "-d", distro, "--", "bash", "-lc", cmd], check=False)
+        done = os.path.isfile(os.path.join(out_dir, "inventory.%s.json" % name))
+        if r.returncode != 0 or not done:
+            share = host.get("share_fallback")
+            if not share:
+                raise SystemExit("WSL scan failed for %s and no share_fallback given" % name)
+            log("WSL service refused the call; falling back to the share %s" % share)
+            alt = dict(host)
+            for key in ("claude_roots", "codex_roots", "copilot_roots", "opencode_dbs", "openclaw_roots", "gemini_roots", "qwen_roots", "aider_roots", "kimi_roots", "vibe_roots", "continue_roots", "pi_roots"):
+                alt[key] = [share.rstrip("/\\") + p for p in host.get(key, [])]
+            for key in ("cline_roots", "generic_roots"):
+                alt[key] = [(x.split("=", 1)[0] + "=" + share.rstrip("/\\") + x.split("=", 1)[1]) if "=" in x else share.rstrip("/\\") + x for x in host.get(key, [])]
+            # sqlite over a UNC share cannot be opened via URI; copy the opencode db locally first
+            if alt.get("opencode_dbs"):
+                copies = []
+                for p in alt["opencode_dbs"]:
+                    dst = os.path.join(out_dir, os.path.basename(p))
+                    try:
+                        shutil.copy(p, dst)
+                        copies.append(dst)
+                    except OSError as ex:
+                        log("could not copy %s: %s" % (p, ex))
+                alt["opencode_dbs"] = copies
+            run([python, SCANNER] + scan_args(alt) + ["--out-dir", out_dir])
+    elif kind == "ssh":
+        target = host["ssh"]
+        remote_tmp = host.get("remote_tmp", "/tmp/ai-usage-ledger")
+        run(["ssh", "-o", "BatchMode=yes", target, "mkdir -p %s" % remote_tmp])
+        run(["scp", "-q", SCANNER, "%s:%s/compile_ai_logs.py" % (target, remote_tmp)])
+        cmd = "%s %s/compile_ai_logs.py %s --out-dir %s/out" % (host.get("python", "python3"), remote_tmp, " ".join(shlex.quote(x) for x in scan_args(host)), remote_tmp)
+        run(["ssh", "-o", "BatchMode=yes", target, cmd])
+        run(["scp", "-q", "%s:%s/out/*" % (target, remote_tmp), out_dir])
+    else:
+        raise SystemExit("unknown host kind %r" % kind)
+    # optional: stage Codex sqlite and Claude stats-cache for validation
+    staged = {}
+    for key, dst_name in (("codex_sqlite", "state_5.sqlite"), ("claude_stats_cache", "stats-cache.json")):
+        src = host.get(key)
+        if not src:
+            continue
+        dst = os.path.join(out_dir, dst_name)
+        try:
+            if kind == "ssh":
+                run(["scp", "-q", "%s:%s" % (host["ssh"], src), dst])
+            elif kind == "wsl" and not os.path.exists(src):
+                share = host.get("share_fallback", "")
+                shutil.copy(share.rstrip("/\\") + src, dst)
+            else:
+                shutil.copy(src, dst)
+            staged[key] = dst
+        except Exception as ex:
+            log("could not stage %s for %s: %s" % (key, name, ex))
+    return staged
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--manifest", required=True)
+    ap.add_argument("--only", default="scan,report,analyze,build", help="comma list of steps: scan,report,analyze,build")
+    ap.add_argument("--hosts", default=None, help="comma list of host names to scan (default all)")
+    ap.add_argument("--python", default=sys.executable)
+    a = ap.parse_args()
+    M = json.load(open(a.manifest, encoding="utf-8"))
+    steps = set(a.only.split(","))
+    mdir0 = os.path.dirname(os.path.abspath(a.manifest))
+    work = os.path.abspath(os.path.join(mdir0, M.get("workdir", ".")))
+    scans = os.path.join(work, "scans")
+    compiled = os.path.join(work, "compiled")
+    reports = os.path.join(work, "reports")
+    date = M.get("snapshot_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    pkg = os.path.join(reports, "%s_%s" % (M.get("package_prefix", "AI_Usage_Ledger"), date))
+    for d in (scans, compiled, reports):
+        os.makedirs(d, exist_ok=True)
+    mdir = os.path.dirname(os.path.abspath(a.manifest))
+
+    def rel(p):  # manifest-relative paths become absolute so every step can run from any cwd
+        return os.path.abspath(os.path.join(mdir, p)) if p and not os.path.isabs(p) else p
+    pricing = rel(M.get("pricing")) or os.path.join(HERE, "..", "templates", "pricing.json")
+    accounts = rel(M.get("accounts"))
+    config = rel(M.get("report_config"))
+    for h in M["hosts"]:  # root paths in the manifest are also manifest-relative when not absolute
+        for key in ("claude_roots", "codex_roots", "copilot_roots", "opencode_dbs", "openclaw_roots", "gemini_roots", "qwen_roots", "aider_roots", "kimi_roots", "vibe_roots", "continue_roots", "pi_roots"):
+            if h.get("kind", "local") in ("local", "share") and h.get(key):
+                h[key] = [rel(x) for x in h[key]]
+        for key in ("cline_roots", "generic_roots"):
+            if h.get("kind", "local") in ("local", "share") and h.get(key):
+                h[key] = [(x.split("=", 1)[0] + "=" + rel(x.split("=", 1)[1])) if "=" in x else rel(x) for x in h[key]]
+        for key in ("codex_sqlite", "claude_stats_cache"):
+            if h.get("kind", "local") in ("local", "share") and h.get(key):
+                h[key] = rel(h[key])
+    tz = M.get("timezone", "UTC")
+    hosts = M["hosts"]
+    if a.hosts:
+        want = set(a.hosts.split(","))
+        hosts = [h for h in hosts if h["name"] in want]
+
+    if "scan" in steps:
+        for h in hosts:
+            log("scanning %s (%s)" % (h["name"], h.get("kind", "local")))
+            scan_host(h, scans, a.python)
+
+    if "report" in steps:
+        cmd = [a.python, SCANNER, "report", "--out-dir", compiled, "--pricing", pricing]
+        if accounts:
+            cmd += ["--accounts", accounts]
+        for pat in ("events.*.jsonl", "sessions.*.jsonl", "prompts.*.jsonl", "inventory.*.json"):
+            flag = {"events.*.jsonl": "--events", "sessions.*.jsonl": "--sessions", "prompts.*.jsonl": "--prompts", "inventory.*.json": "--inventory"}[pat]
+            cmd += [flag, os.path.join(scans, "*", pat)]
+        run(cmd)
+
+    if "analyze" in steps:
+        cmd = [a.python, os.path.join(HERE, "analyze_events.py"), "--compiled", compiled, "--tz", tz, "--pricing", pricing]
+        for h in M["hosts"]:
+            p = os.path.join(scans, h["name"], "state_5.sqlite")
+            if os.path.isfile(p):
+                cmd += ["--sqlite", "%s=%s" % (h["name"], p)]
+        run(cmd)
+
+    if "build" in steps:
+        env = dict(os.environ)
+        if M.get("study_url"):
+            env["STUDY_URL"] = M["study_url"]
+        dash_cmd = [a.python, os.path.join(HERE, "build_dashboard.py"), os.path.join(compiled, "summary.json"), os.path.join(compiled, "agent-ledger.html")]
+        if config:
+            dash_cmd.append(config)
+        run(dash_cmd, env=env)
+        cmd = [a.python, os.path.join(HERE, "build_report.py"), "--compiled", compiled, "--scans", scans, "--pricing", pricing, "--out", pkg, "--date", date, "--tz", tz]
+        if config:
+            cmd += ["--config", config]
+        for h in M["hosts"]:
+            p = os.path.join(scans, h["name"], "stats-cache.json")
+            if os.path.isfile(p):
+                cmd += ["--stats-cache", "%s=%s" % (h["name"], p)]
+        run(cmd)
+        if accounts and os.path.isfile(accounts):
+            shutil.copy(accounts, os.path.join(pkg, "accounts.json"))
+        zpath = pkg + ".zip"
+        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+            for fn in sorted(os.listdir(pkg)):
+                z.write(os.path.join(pkg, fn), os.path.join(os.path.basename(pkg), fn))
+        log("package: %s  (sha256 %s)" % (zpath, sha256(zpath)[:16]))
+        log("dashboard: %s" % os.path.join(compiled, "agent-ledger.html"))
+        log("report: %s" % os.path.join(pkg, "USAGE_REPORT.md"))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,14 @@
+flowchart LR
+  A[Discover logs and accounts] --> B[Manifest, pricing, accounts, branding]
+  B --> C[Scan each host]
+  C --> D[Merge, de-duplicate, price, attribute]
+  D --> E{Validated?}
+  E -->|No| F[Fix rules or replay filter]
+  F --> C
+  E -->|Yes| G[Dashboard and study package]
+  classDef source fill:#eef6ff,stroke:#3778c2,color:#102a43;
+  classDef gate fill:#fff7e6,stroke:#c97a12,color:#3d2600;
+  classDef output fill:#eefaf0,stroke:#2f8f46,color:#12351d;
+  class A,B,C,D source;
+  class E gate;
+  class F,G output;

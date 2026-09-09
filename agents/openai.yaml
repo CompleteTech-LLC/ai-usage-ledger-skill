@@ -1,0 +1,7 @@
+interface:
+  display_name: "AI Usage Ledger Skill"
+  short_description: "Compile, price and attribute local AI agent usage"
+  default_prompt: "Use $ai-usage-ledger to locate every AI coding-agent log on this machine and its hosts, compile them into one de-duplicated ledger, price them at list API rates by account, and render the branded dashboard and study package."
+
+policy:
+  allow_implicit_invocation: false

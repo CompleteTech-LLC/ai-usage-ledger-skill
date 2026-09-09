@@ -1,0 +1,4 @@
+# The ledger pipeline (scripts/*.py) is standard-library Python 3.8+ and has no runtime dependencies.
+# Quality validation (scripts/validate_quality.py) needs:
+pyyaml==6.0.3
+ruff==0.14.0

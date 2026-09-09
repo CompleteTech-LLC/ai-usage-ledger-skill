@@ -1,0 +1,14 @@
+# Examples
+
+Runnable example inputs for this skill.
+
+- `manifest.workstation.json` — a Windows workstation with a WSL distro, a lab server over SSH, and an old-profile backup on another drive.
+- `report_config.completetech.json` — the CompleteTech LLC brand preset (logo, palette, tagline, footer) for the dashboard and study.
+
+Rendered demonstration artifacts live under `assets/examples/` (`example.md`, `example.html`, `example.png`) so README previews and packaged outputs stay close to the visual assets they reference. They were produced from synthetic fixtures (`tests/make_fixtures.py`), not from any real account.
+
+Copy the two files to a working directory, replace the `<you>` placeholders, add `pricing.json` and `accounts.json` from `templates/`, then:
+
+```bash
+python3 scripts/run_pipeline.py --manifest manifest.workstation.json
+```
