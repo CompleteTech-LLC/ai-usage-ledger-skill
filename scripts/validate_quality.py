@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import py_compile
 import re
 import shutil
@@ -105,7 +106,8 @@ def validate_mermaid(skip: bool) -> None:
 
 
 def smoke_pipeline() -> None:
-    for script in ("run_pipeline.py", "compile_ai_logs.py", "analyze_events.py", "build_report.py"):
+    for script in ("run_pipeline.py", "compile_ai_logs.py", "analyze_events.py", "build_report.py", "ledger.py", "ledger_store.py", "detect_hosts.py",
+                   "anonymize.py", "schedule.py", "render_ledger_doc.py", "render_pdf.py", "ledger_archive.py", "ledger_query.py"):
         run([sys.executable, str(ROOT / "scripts" / script), "--help"])
     print("pipeline smoke ok")
 
@@ -116,9 +118,16 @@ def run_fixture_suite() -> None:
     if result.returncode != 0 or "ALL OK" not in result.stdout:
         sys.stderr.write(result.stderr)
         raise RuntimeError("parser fixture suite failed")
+    print("fixture suite ok")
+    env = dict(os.environ, AI_USAGE_LEDGER_HOME=str(ROOT / "tests" / "out" / "home"))
+    result = subprocess.run([sys.executable, str(ROOT / "tests" / "test_store.py")], cwd=ROOT, capture_output=True, text=True, env=env)
+    sys.stdout.write(result.stdout)
+    if result.returncode != 0 or "STORE OK" not in result.stdout:
+        sys.stderr.write(result.stderr)
+        raise RuntimeError("store / onboarding suite failed")
     shutil.rmtree(ROOT / "tests" / "fixtures", ignore_errors=True)
     shutil.rmtree(ROOT / "tests" / "out", ignore_errors=True)
-    print("fixture suite ok")
+    print("store suite ok")
 
 
 def frontmatter() -> dict[str, Any]:

@@ -1,6 +1,23 @@
 # Finding the logs and the accounts
 
-Do this before writing the manifest. Enumerate every user profile on every drive and host; the interesting material is often in an old profile backup or a second OS on the same box.
+`scripts/detect_hosts.py` does the routine part of this automatically and `ledger.py init` runs it during onboarding. Read on for what it looks for, what it cannot see, and how to check its output.
+
+## What the detector covers
+
+| Platform | Home directories | Extra locations |
+|---|---|---|
+| Windows | `%USERPROFILE%`; with `--all-profiles` every `<drive>:\Users\<name>` on every mounted drive | `%APPDATA%\{Code, Code - Insiders, VSCodium, Cursor, Windsurf, Trae, Kiro, Antigravity}\User\globalStorage` for Cline / Roo / Kilo; `%LOCALAPPDATA%` tools |
+| WSL | every distro from `wsl.exe -l -q` (Docker distros skipped), every `/home/<name>` reached through `\\wsl$\<distro>` | `~/.vscode-server/data/User/globalStorage`, `~/.cursor-server/...` for remote-mode extensions; the distro path is written to the manifest with the share as `share_fallback` |
+| macOS | `~`; with `--all-profiles` every `/Users/<name>` | `~/Library/Application Support/<editor>/User/globalStorage` |
+| Linux | `~`; with `--all-profiles` every `/home/<name>` | `~/.config/<editor>/User/globalStorage`, `~/.vscode-server/...` |
+
+Per home it checks, in order: `CODEX_HOME` or `~/.codex` (needs `sessions/` or `archived_sessions/`; `state_5.sqlite` noted), `~/.claude` (needs `projects/`; `stats-cache.json` noted), `COPILOT_HOME` or `~/.copilot/session-state`, `GEMINI_DATA_DIR` or `~/.gemini/tmp`, `QWEN_DATA_DIR` or `~/.qwen/history`, `KIMI_DATA_DIR` / `KIMI_SHARE_DIR` / `~/.kimi` / `~/.kimi-code`, `VIBE_HOME` or `~/.vibe/logs/session`, `~/.continue/dev_data`, `PI_AGENT_DIR` or `~/.pi/agent/sessions`, `OPENCODE_DATA_DIR` or `~/.local/share/opencode/opencode.db`, `OPENCLAW_DIR` or `~/.openclaw/agents`, the Cline family under each editor's global storage and `~/.cline`, and generic roots for Codebuff (`~/.config/manicode`), Droid (`~/.factory/sessions`), Amp, LM Studio, OpenHands, Grok, Hermes and Zcode. Environment overrides apply only to the profile the detector runs as.
+
+Two profiles that resolve to the same directory (a mapped or `subst` drive letter, a bind mount, a symlinked home) are reported once; the note `same volume as an already detected profile` explains the skip. Without that rule every call would be stored twice under two host names.
+
+What it does not do: read anything that needs elevation, follow SSH (name those hosts at the prompt or in `config.json` `extra_hosts`), or find gateway logs kept outside a home directory (`/srv`, `/opt`, containers). Use the sweep below for those and add them to the manifest by hand.
+
+Enumerate every user profile on every drive and host; the interesting material is often in an old profile backup or a second OS on the same box.
 
 ## Where each tool keeps usage
 
