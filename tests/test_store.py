@@ -205,6 +205,13 @@ def check_cli(scan_dir):
     if not qgood:
         sys.stdout.write("".join(x.stderr[-400:] for x in (q1, q2, q3, q4, q5, q6, q7)))
     ok = ok and qgood
+    # tool filter: a run that skips codex and claude-code scans everything else only
+    rf = run([py, ledger, "run", "--no-detect", "--skip-tools", "codex,claude-code"], env=env, check=False)
+    ev = os.path.join(cfg["workdir"], "scans", "fixture", "events.fixture.jsonl")
+    tools_seen = {json.loads(line)["tool"] for line in open(ev, encoding="utf-8")} if os.path.isfile(ev) else set()
+    fgood = rf.returncode == 0 and tools_seen and not ({"codex", "claude-code"} & tools_seen) and "aider" in tools_seen
+    print("skip-tools: scanned %s  %s" % (",".join(sorted(tools_seen)), "OK" if fgood else "FAIL\n" + rf.stdout[-800:] + rf.stderr[-800:]))
+    ok = ok and fgood
     lst = run([py, ledger, "doc", "--list"], env=env)
     if len([x for x in lst.stdout.splitlines() if x.strip()]) != len(idx):
         bad.append(("--list", "count mismatch"))

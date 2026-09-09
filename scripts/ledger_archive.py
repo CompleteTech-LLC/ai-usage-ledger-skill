@@ -165,11 +165,16 @@ class Archive:
         wanted = sorted(p for p in paths if os.path.basename(p).lower() not in ("auth.json", ".credentials.json"))
         if not wanted:
             return 0, 0, 0
-        # ask for size+mtime first so unchanged files are not transferred
-        stat_cmd = "while IFS= read -r f; do [ -f \"$f\" ] && stat -c '%s %Y %n' -- \"$f\" 2>/dev/null; done"
-        r = subprocess.run(["ssh", ssh, stat_cmd], input="\n".join(wanted) + "\n", capture_output=True, text=True)
+        # ask for size+mtime first so unchanged files are not transferred. The remote command is a small shell
+        # script fed on stdin (no quoting through Windows argv); the file list travels inside a quoted heredoc.
+        listing = "\n".join(wanted)
+        stat_script = "while IFS= read -r f; do [ -f \"$f\" ] && stat -c '%s %Y %n' -- \"$f\" 2>/dev/null; done <<'AI_USAGE_LEDGER_EOF'\n" + listing + "\nAI_USAGE_LEDGER_EOF\nexit 0\n"
+        # bytes, not text mode: on Windows text mode would turn the newlines into CRLF and break every path
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", ssh, "sh"], input=stat_script.encode("utf-8"), capture_output=True)
+        if r.returncode != 0:
+            log("  ssh stat failed for %s: %s" % (host, r.stderr.decode("utf-8", "replace")[-300:]))
         remote = {}
-        for line in r.stdout.splitlines():
+        for line in r.stdout.decode("utf-8", "replace").splitlines():
             parts = line.split(" ", 2)
             if len(parts) == 3:
                 remote[parts[2]] = (int(parts[0]), float(parts[1]))
@@ -177,8 +182,9 @@ class Archive:
         if not todo:
             return 0, 0, 0
         started = now()
-        proc = subprocess.Popen(["ssh", ssh, "tar czf - -T -"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out, err = proc.communicate(input=("\n".join(todo) + "\n").encode("utf-8"))
+        tar_script = "tar czf - -T - <<'AI_USAGE_LEDGER_EOF'\n" + "\n".join(todo) + "\nAI_USAGE_LEDGER_EOF\n"
+        proc = subprocess.Popen(["ssh", "-o", "BatchMode=yes", ssh, "sh"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = proc.communicate(input=tar_script.encode("utf-8"))
         if proc.returncode not in (0, 1):  # 1 = some files changed while reading; acceptable for append-only logs
             log("  ssh tar failed for %s: %s" % (host, err.decode("utf-8", "replace")[-300:]))
             return 0, 0, 0

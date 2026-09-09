@@ -259,6 +259,43 @@ def write_report_config(cfg):
 # run
 # ----------------------------------------------------------------------------
 
+TOOL_ROOT_KEYS = {"codex": ["codex_roots", "codex_sqlite"], "claude-code": ["claude_roots", "claude_stats_cache"], "copilot-cli": ["copilot_roots"],
+                  "opencode": ["opencode_dbs"], "openclaw": ["openclaw_roots"], "gemini-cli": ["gemini_roots"], "qwen-code": ["qwen_roots"], "kimi": ["kimi_roots"],
+                  "mistral-vibe": ["vibe_roots"], "continue": ["continue_roots"], "pi": ["pi_roots"], "aider": ["aider_roots"]}
+PREFIXED_KEYS = ("cline_roots", "generic_roots")  # "<tool>=<dir>" entries
+
+
+def filter_manifest(src, dst, only=None, skip=None):
+    """Write a copy of the manifest keeping only the roots of the wanted tools; hosts left without roots are dropped."""
+    with open(src, encoding="utf-8") as fh:
+        m = json.load(fh)
+    only = set(only or [])
+    skip = set(skip or [])
+
+    def keep(tool):
+        return (not only or tool in only) and tool not in skip
+
+    hosts = []
+    for h in m.get("hosts", []):
+        h = dict(h)
+        for tool, keys in TOOL_ROOT_KEYS.items():
+            if not keep(tool):
+                for k in keys:
+                    h.pop(k, None)
+        for k in PREFIXED_KEYS:
+            if h.get(k):
+                h[k] = [x for x in h[k] if keep(x.split("=", 1)[0] if "=" in x else k.split("_")[0])]
+                if not h[k]:
+                    h.pop(k)
+        if any(h.get(k) for keys in TOOL_ROOT_KEYS.values() for k in keys if k.endswith("_roots") or k.endswith("_dbs")) or any(h.get(k) for k in PREFIXED_KEYS):
+            hosts.append(h)
+    m["hosts"] = hosts
+    m["_comment"] = "Filtered copy for one run (--tools / --skip-tools); the full manifest is manifest.json."
+    with open(dst, "w", encoding="utf-8") as fh:
+        json.dump(m, fh, indent=2)
+    return [h["name"] for h in hosts]
+
+
 def do_run(args):
     cfg = load_config()
     if cfg is None:
@@ -276,11 +313,16 @@ def do_run(args):
     os.makedirs(work, exist_ok=True)
     py = sys.executable
     pipeline = os.path.join(HERE, "run_pipeline.py")
+    manifest = cfg["manifest_path"]
+    if getattr(args, "tools", None) or getattr(args, "skip_tools", None):
+        manifest = os.path.join(home_dir(), "manifest.run.json")
+        kept = filter_manifest(cfg["manifest_path"], manifest, (args.tools or "").split(",") if args.tools else None, (args.skip_tools or "").split(",") if args.skip_tools else None)
+        print("tool filter: only=%s skip=%s -> hosts with roots left: %s" % (args.tools or "-", args.skip_tools or "-", ", ".join(kept) or "none"))
     if not args.no_scan:
-        run([py, pipeline, "--manifest", cfg["manifest_path"], "--only", "scan"] + (["--hosts", args.hosts] if args.hosts else []))
+        run([py, pipeline, "--manifest", manifest, "--only", "scan"] + (["--hosts", args.hosts] if args.hosts else []))
     archive_summary = None
     if (cfg.get("archive", {}).get("raw_logs") or args.archive) and not args.no_scan:
-        with open(cfg["manifest_path"], encoding="utf-8") as fh:
+        with open(manifest, encoding="utf-8") as fh:
             mhosts = json.load(fh).get("hosts", [])
         if args.hosts:
             mhosts = [h for h in mhosts if h["name"] in args.hosts.split(",")]
@@ -317,7 +359,7 @@ def do_run(args):
     inv = os.path.join(scans, "*", "inventory.*.json")
     run([py, os.path.join(HERE, "compile_ai_logs.py"), "report", "--events", paths["events"][0], "--sessions", paths["sessions"][0], "--prompts", paths["prompts"][0],
          "--inventory", inv, "--pricing", cfg["pricing_path"], "--accounts", cfg["accounts_path"], "--out-dir", compiled])
-    run([py, pipeline, "--manifest", cfg["manifest_path"], "--only", "analyze,build"])
+    run([py, pipeline, "--manifest", manifest, "--only", "analyze,build"])
     anon_out = None
     if args.anonymize or cfg.get("anonymize", {}).get("on_every_run"):
         anon_out = build_anonymized(cfg, st, work, py, pipeline)
@@ -376,10 +418,21 @@ def build_anonymized(cfg, st, work, py, pipeline):
     with open(rc_path, "w", encoding="utf-8") as fh:
         json.dump(rc, fh, indent=2)
     an.save_map()
+    with open(cfg["pricing_path"], encoding="utf-8") as fh:
+        pricing = json.load(fh)
+    pricing_anon = {"_comment": "Price tables only; operator notes removed for publication.", "models": pricing.get("models", {}), "fallback_by_tool": pricing.get("fallback_by_tool", {})}
+    for k in ("as_of", "sources", "currency"):
+        if k in pricing:
+            pricing_anon[k] = pricing[k]
+    if isinstance(pricing.get("subscriptions"), dict):  # keep plan names and prices, drop the evidence notes
+        pricing_anon["subscriptions"] = {t: {"name": v.get("name"), "monthly_usd": v.get("monthly_usd")} for t, v in pricing["subscriptions"].items() if isinstance(v, dict)}
+    pricing_path = os.path.join(root, "pricing.json")
+    with open(pricing_path, "w", encoding="utf-8") as fh:
+        json.dump(pricing_anon, fh, indent=2)
     run([py, os.path.join(HERE, "compile_ai_logs.py"), "report", "--events", ev, "--sessions", se, "--inventory", os.path.join(scans, "*", "inventory.*.json"),
-         "--pricing", cfg["pricing_path"], "--accounts", acc_path, "--out-dir", compiled])
+         "--pricing", pricing_path, "--accounts", acc_path, "--out-dir", compiled])
     manifest = {"_comment": "generated for the anonymised build", "workdir": ".", "timezone": cfg.get("timezone", "UTC"), "package_prefix": cfg.get("package_prefix", "AI_Usage_Ledger") + "_anonymized",
-                "pricing": cfg["pricing_path"], "accounts": acc_path, "report_config": rc_path, "hosts": []}
+                "pricing": pricing_path, "accounts": acc_path, "report_config": rc_path, "hosts": []}
     mpath = os.path.join(root, "manifest.json")
     with open(mpath, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2)
@@ -509,6 +562,8 @@ def main():
     i.set_defaults(fn=onboard)
     r = sub.add_parser("run", help="scan, append to the store, rebuild dashboard and study")
     r.add_argument("--hosts", help="comma list of host names to scan")
+    r.add_argument("--tools", help="comma list of tools to scan (e.g. copilot-cli,opencode,openclaw); others are left out of this run")
+    r.add_argument("--skip-tools", help="comma list of tools to leave out of this run (e.g. codex,claude-code)")
     r.add_argument("--no-scan", action="store_true", help="rebuild from the store without rescanning")
     r.add_argument("--no-detect", action="store_true", help="do not refresh the manifest from detection")
     r.add_argument("--anonymize", action="store_true", help="also build the anonymised copy under <workdir>/anonymized")
