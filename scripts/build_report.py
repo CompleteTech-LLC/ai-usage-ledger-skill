@@ -18,6 +18,9 @@ import json
 import os
 import shutil
 import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import safety  # noqa: E402
+import html as _html  # noqa: E402
 from collections import defaultdict, OrderedDict
 from datetime import datetime, timezone
 
@@ -266,8 +269,10 @@ def _logo_data_uri(path, base_dir=None):
 
 
 def brand_blocks(cfg, base_dir=None):
-    """Return (style_override_html, header_html, footer_html, google_fonts_link) from cfg['branding']."""
-    b = (cfg or {}).get("branding") or {}
+    """Return (style_override_html, header_html, footer_html, fonts_link) from cfg['branding'], all values sanitised
+    by safety.sanitize_branding: text is HTML-escaped, colours/tokens/fonts validated, the logo is a local file
+    turned into a data URI, remote resources and extra CSS only when explicitly allowed."""
+    b = safety.sanitize_branding((cfg or {}).get("branding") or {}, base_dir, _logo_data_uri)
     vars_ = []
     if b.get("accent"):
         vars_.append("--focus:%s;--brand-accent:%s" % (b["accent"], b["accent"]))
@@ -286,18 +291,19 @@ def brand_blocks(cfg, base_dir=None):
     style += b.get("extra_css", "") + "</style>"
     header = ""
     if b.get("logo") or b.get("name") or b.get("eyebrow"):
-        logo = _logo_data_uri(b.get("logo"), base_dir)
         text = "".join([
             ('<div class="eyebrow">%s</div>' % b["eyebrow"]) if b.get("eyebrow") else "",
             ('<div class="name">%s</div>' % b["name"]) if b.get("name") else "",
             ('<div class="tagline">%s</div>' % b["tagline"]) if b.get("tagline") else "",
         ])
         header = '<div class="brand">%s<div>%s</div>%s</div>' % (
-            ('<img src="%s" alt="%s">' % (logo, b.get("name", "logo"))) if logo else "",
+            ('<img src="%s" alt="%s">' % (b["logo"], b.get("name", "logo"))) if b.get("logo") else "",
             text,
             ('<div class="contact">%s</div>' % b["contact"]) if b.get("contact") else "")
     footer = ('<div class="brandfoot">%s</div>' % b["footer"]) if b.get("footer") else ""
-    link = ('<link rel="stylesheet" href="%s">' % b["google_fonts_url"]) if b.get("google_fonts_url") else ""
+    link = (safety.CSP_META_EXTERNAL if b.get("allow_external_resources") else safety.CSP_META)
+    if b.get("google_fonts_url"):
+        link += '<link rel="stylesheet" href="%s">' % b["google_fonts_url"]
     return style, header, footer, link
 
 
@@ -746,7 +752,8 @@ SHA256SUMS binds the content files in this package.
 """ % (a.date, a.tz))
     with open(os.path.join(a.out, "report.html"), "w", encoding="utf-8") as fh:
         _style, _header, _footer, _link = brand_blocks(CFG, os.path.dirname(os.path.abspath(a.config)) if a.config else None)
-        fh.write(HTML_HEAD.replace("__TITLE__", CFG.get("html_title", "Agent Usage Study")) + _link + _style + THEME_JS.replace("__THEME_DEFAULT__", str(CFG.get("theme_default") or "system")) + THEMEBAR_HTML + '<div class="wrap">' + _header + "\n".join(D.html) + _footer + "</div>")
+        _theme = str(CFG.get("theme_default") or "system")
+        fh.write(HTML_HEAD.replace("__TITLE__", _html.escape(str(CFG.get("html_title", "Agent Usage Study")), quote=True)) + _link + _style + THEME_JS.replace("__THEME_DEFAULT__", _theme if _theme in ("light", "dark", "system") else "system") + THEMEBAR_HTML + '<div class="wrap">' + _header + "\n".join(D.html) + _footer + "</div>")
     with open(os.path.join(a.out, "SHA256SUMS"), "w", encoding="utf-8") as fh:
         for name in ("USAGE_REPORT.md", "report.html", "ledger.json", "pricing.json", "README.md"):
             fh.write("%s  %s\n" % (sha256(os.path.join(a.out, name)), name))
@@ -756,7 +763,6 @@ SHA256SUMS binds the content files in this package.
 THEME_JS = '<script>\n(function(){\n  var KEY="ledger-theme", root=document.documentElement;\n  function apply(v){ if(v==="light"||v==="dark"){root.setAttribute("data-theme",v);}else{root.removeAttribute("data-theme");} document.querySelectorAll(".themebar button").forEach(function(b){b.classList.toggle("on", b.dataset.t===(v||"system"));}); }\n  var DEF="__THEME_DEFAULT__", saved=null; try{saved=localStorage.getItem(KEY);}catch(e){}\n  if(!saved && (DEF==="light"||DEF==="dark")) saved=DEF;\n  apply(saved);\n  document.addEventListener("click",function(ev){ var b=ev.target.closest(".themebar button"); if(!b) return; var v=b.dataset.t; try{ if(v==="system") localStorage.removeItem(KEY); else localStorage.setItem(KEY,v);}catch(e){} apply(v==="system"?null:v); });\n})();\n</script>'
 THEMEBAR_HTML = '<div class="themebar" role="group" aria-label="Colour theme"><button type="button" data-t="light">Light</button><button type="button" data-t="system" class="on">System</button><button type="button" data-t="dark">Dark</button></div>'
 HTML_HEAD = r"""<meta charset="utf-8"><title>__TITLE__</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 :root{color-scheme:light;--bg:#f6f6f3;--surface:#ffffff;--surface-2:#eeeeea;--ink:#1a1a17;--ink-2:#55554f;--ink-3:#8a8a82;--line:#e2e2dc;--line-2:#cfcfc7;
 --codex:#2a78d6;--claude:#eb6834;--copilot:#1baf7a;--opencode:#eda100;--openclaw:#e87ba4;

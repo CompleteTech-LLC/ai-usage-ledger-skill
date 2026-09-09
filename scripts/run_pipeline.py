@@ -31,6 +31,8 @@ from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCANNER = os.path.join(HERE, "compile_ai_logs.py")
+sys.path.insert(0, HERE)
+import safety  # noqa: E402
 
 
 def log(msg):
@@ -38,8 +40,11 @@ def log(msg):
 
 
 def run(cmd, check=True, **kw):
-    log("$ " + (cmd if isinstance(cmd, str) else " ".join(shlex.quote(c) for c in cmd)))
-    r = subprocess.run(cmd, shell=isinstance(cmd, str), **kw)
+    """Argument lists only; a shell is never involved on the local side."""
+    if isinstance(cmd, str):
+        raise SystemExit("internal error: commands must be argument lists")
+    log("$ " + " ".join(shlex.quote(c) for c in cmd))
+    r = subprocess.run(cmd, **kw)
     if check and r.returncode != 0:
         raise SystemExit("command failed (%d): %s" % (r.returncode, cmd))
     return r
@@ -47,7 +52,11 @@ def run(cmd, check=True, **kw):
 
 def scan_args(host):
     """Translate a manifest host entry into compile_ai_logs.py scan arguments."""
-    args = ["scan", "--host", host["name"]]
+    args = ["scan", "--host", safety.check_path(host["name"], "host name")]
+    for key in ("claude_roots", "codex_roots", "copilot_roots", "opencode_dbs", "openclaw_roots", "gemini_roots", "qwen_roots", "aider_roots", "kimi_roots",
+                "vibe_roots", "continue_roots", "pi_roots", "cline_roots", "generic_roots"):
+        for r in host.get(key, []):
+            safety.check_path(r, key)
     for r in host.get("claude_roots", []):
         args += ["--claude-root", r]
     for r in host.get("codex_roots", []):
@@ -77,12 +86,12 @@ def scan_host(host, scans_dir, python="python"):
     if kind == "local" or kind == "share":
         run([host.get("python", python), SCANNER] + scan_args(host) + ["--out-dir", out_dir])
     elif kind == "wsl":
-        distro = host.get("distro", "Ubuntu")
+        distro, wsl_python = safety.validate_wsl_host(host)
         # the scanner and the output dir must be visible from inside the distro
         win_out = os.path.abspath(out_dir)
         wsl_out = "/mnt/" + win_out[0].lower() + win_out[2:].replace("\\", "/")
         wsl_scanner = "/mnt/" + SCANNER[0].lower() + SCANNER[2:].replace("\\", "/")
-        cmd = "%s %s %s --out-dir %s" % (host.get("python", "python3"), shlex.quote(wsl_scanner), " ".join(shlex.quote(x) for x in scan_args(host)), shlex.quote(wsl_out))
+        cmd = " ".join([shlex.quote(wsl_python), shlex.quote(wsl_scanner)] + [shlex.quote(x) for x in scan_args(host)] + ["--out-dir", shlex.quote(wsl_out)])
         r = run(["wsl.exe", "-d", distro, "--", "bash", "-lc", cmd], check=False)
         done = os.path.isfile(os.path.join(out_dir, "inventory.%s.json" % name))
         if r.returncode != 0 or not done:
@@ -108,13 +117,14 @@ def scan_host(host, scans_dir, python="python"):
                 alt["opencode_dbs"] = copies
             run([python, SCANNER] + scan_args(alt) + ["--out-dir", out_dir])
     elif kind == "ssh":
-        target = host["ssh"]
-        remote_tmp = host.get("remote_tmp", "/tmp/ai-usage-ledger")
-        run(["ssh", "-o", "BatchMode=yes", target, "mkdir -p %s" % remote_tmp])
-        run(["scp", "-q", SCANNER, "%s:%s/compile_ai_logs.py" % (target, remote_tmp)])
-        cmd = "%s %s/compile_ai_logs.py %s --out-dir %s/out" % (host.get("python", "python3"), remote_tmp, " ".join(shlex.quote(x) for x in scan_args(host)), remote_tmp)
-        run(["ssh", "-o", "BatchMode=yes", target, cmd])
-        run(["scp", "-q", "%s:%s/out/*" % (target, remote_tmp), out_dir])
+        # every remote-shell word is validated against a strict grammar and quoted; the target is checked so it
+        # cannot smuggle ssh/scp options
+        target, remote_tmp, remote_python = safety.validate_ssh_host(host)
+        run(["ssh", "-o", "BatchMode=yes", "--", target, "mkdir -p -- " + shlex.quote(remote_tmp)])
+        run(["scp", "-q", "--", SCANNER, "%s:%s" % (target, shlex.quote(remote_tmp + "/compile_ai_logs.py"))])
+        cmd = " ".join([shlex.quote(remote_python), shlex.quote(remote_tmp + "/compile_ai_logs.py")] + [shlex.quote(x) for x in scan_args(host)] + ["--out-dir", shlex.quote(remote_tmp + "/out")])
+        run(["ssh", "-o", "BatchMode=yes", "--", target, cmd])
+        run(["scp", "-q", "--", "%s:%s" % (target, shlex.quote(remote_tmp + "/out") + "/*"), out_dir])
     else:
         raise SystemExit("unknown host kind %r" % kind)
     # optional: stage Codex sqlite and Claude stats-cache for validation
@@ -126,7 +136,10 @@ def scan_host(host, scans_dir, python="python"):
         dst = os.path.join(out_dir, dst_name)
         try:
             if kind == "ssh":
-                run(["scp", "-q", "%s:%s" % (host["ssh"], src), dst])
+                target, _, _ = safety.validate_ssh_host(host)
+                if not safety.REMOTE_PATH_RE.match(str(src)):
+                    raise safety.UnsafeValue("%s on %s is not a plain absolute path: %r" % (key, name, src))
+                run(["scp", "-q", "--", "%s:%s" % (target, shlex.quote(str(src))), dst])
             elif kind == "wsl" and not os.path.exists(src):
                 share = host.get("share_fallback", "")
                 shutil.copy(share.rstrip("/\\") + src, dst)
@@ -154,6 +167,7 @@ def main():
     ap.add_argument("--python", default=sys.executable)
     a = ap.parse_args()
     M = json.load(open(a.manifest, encoding="utf-8"))
+    safety.warn_if_writable(a.manifest, log)
     steps = set(a.only.split(","))
     mdir0 = os.path.dirname(os.path.abspath(a.manifest))
     work = os.path.abspath(os.path.join(mdir0, M.get("workdir", ".")))
@@ -171,6 +185,9 @@ def main():
     pricing = rel(M.get("pricing")) or os.path.join(HERE, "..", "templates", "pricing.json")
     accounts = rel(M.get("accounts"))
     config = rel(M.get("report_config"))
+    for p in (pricing, accounts, config):
+        safety.warn_if_writable(p, log)
+    safety.check_path(work, "workdir")
     for h in M["hosts"]:  # root paths in the manifest are also manifest-relative when not absolute
         for key in ("claude_roots", "codex_roots", "copilot_roots", "opencode_dbs", "openclaw_roots", "gemini_roots", "qwen_roots", "aider_roots", "kimi_roots", "vibe_roots", "continue_roots", "pi_roots"):
             if h.get("kind", "local") in ("local", "share") and h.get(key):

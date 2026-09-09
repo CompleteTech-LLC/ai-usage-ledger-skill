@@ -13,7 +13,7 @@ Part of the CompleteTech LLC agentic services skill library. Where the `agentic-
 ## OpenClaw / ClawHub Metadata
 
 - Skill key: `ai-usage-ledger`
-- Version-ready metadata: `1.5.0`
+- Version-ready metadata: `1.5.1`
 - Homepage: https://github.com/CompleteTech-LLC/ai-usage-ledger-skill
 - README: https://github.com/CompleteTech-LLC/ai-usage-ledger-skill#readme
 - Runtime binaries: `python3`
@@ -146,7 +146,15 @@ The committed examples use synthetic fixture data only; no real account or trans
 
 ## Branding Assets
 
-`assets/logo.png` is the CompleteTech LLC logo used on the dashboard and study headers, on the HTML band of every ledger document, and in the PDF / DOCX letterhead. `examples/report_config.completetech.json` carries the palette (`#1E3A8A` accent, `#0F172A` ink, `#EEF2FF` soft accent, `#64748B` muted, `#E2E8F0` border, `#F8FAFC` zebra), eyebrow, tagline and footer used across the skill library; onboarding offers these as defaults and stores whatever the operator answers instead. Both pages render in light, dark and system themes with a persisted toggle, starting from the theme chosen at onboarding.
+`assets/logo.png` is the CompleteTech LLC logo used on the dashboard and study headers, on the HTML band of every ledger document, and in the PDF / DOCX letterhead. `examples/report_config.completetech.json` carries the palette (`#1E3A8A` accent, `#0F172A` ink, `#EEF2FF` soft accent, `#64748B` muted, `#E2E8F0` border, `#F8FAFC` zebra), eyebrow, tagline and footer used across the skill library; onboarding offers these as defaults and stores whatever the operator answers instead. Both pages render in light, dark and system themes with a persisted toggle, starting from the theme chosen at onboarding. They are self-contained: the logo is inlined, fonts fall back to locally installed faces or the system stack, and nothing is fetched from the network.
+
+## Security Model
+
+- Configuration files (manifest, config, accounts, pricing, report config) are trusted input that names hosts to reach and text to render; keep them owner-writable (the scripts warn otherwise).
+- No shell is ever handed a string: local commands are argument lists, the CSV merge sort is Python, and every word sent to an SSH or WSL shell is validated against a strict grammar and quoted (`scripts/safety.py`).
+- The scheduler wrapper carries fixed flags only, is written with mode 0700 on POSIX, and its contents are printed before anything is registered.
+- Branding is HTML-escaped and validated; logos are inlined from local files; generated pages carry a Content-Security-Policy and load nothing from the network unless `allow_external_resources` is set.
+- `tests/test_security.py` keeps these properties under regression; the ClawHub audit findings for 1.5.0 are addressed in 1.5.1.
 
 ## Brand Notes
 

@@ -55,6 +55,11 @@ def load_config():
     p = config_path()
     if not os.path.isfile(p):
         return None
+    try:
+        import safety
+        safety.warn_if_writable(p)
+    except Exception:
+        pass
     with open(p, encoding="utf-8") as fh:
         return json.load(fh)
 
@@ -217,7 +222,7 @@ def onboard(args):
     sch = cfg["schedule"]
     if sch.get("install") and sch.get("frequency", "none") != "none":
         rc = schedule.install(home_dir(), sys.executable, sch["frequency"], sch.get("time", "03:00"), sch.get("weekday", "mon"),
-                              "--anonymize" if cfg["anonymize"].get("on_every_run") else "")
+                              ["anonymize"] if cfg["anonymize"].get("on_every_run") else [])
         sch["installed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds") if rc == 0 else None
         sch["install"] = False  # one-shot; the saved frequency documents what is installed
         save_config(cfg)
@@ -506,7 +511,7 @@ def do_schedule(args):
             freq = "daily"
         t = args.time or sch.get("time") or "03:00"
         wd = args.weekday or sch.get("weekday") or "mon"
-        rc = schedule.install(home_dir(), sys.executable, freq, t, wd, "--anonymize" if cfg.get("anonymize", {}).get("on_every_run") else "", args.dry_run)
+        rc = schedule.install(home_dir(), sys.executable, freq, t, wd, ["anonymize"] if cfg.get("anonymize", {}).get("on_every_run") else [], args.dry_run)
         if rc == 0 and not args.dry_run:
             sch.update({"frequency": freq, "time": t, "weekday": wd, "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
             save_config(cfg)

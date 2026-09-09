@@ -319,8 +319,10 @@ def logo_uri(path):
     import mimetypes
     if not path:
         return None
-    if path.startswith("http") or path.startswith("data:"):
+    if path.startswith("data:image/"):
         return path
+    if path.startswith("http"):
+        return None  # generated pages are self-contained; point branding.logo at a local file
     if not os.path.isfile(path):
         return None
     mt = mimetypes.guess_type(path)[0] or "image/png"
@@ -334,9 +336,11 @@ def build_html(md, brand, title, doc_type, theme_default="system"):
         ('<img src="%s" alt="%s logo">' % (logo, html.escape(brand.get("name") or ""))) if logo else "", html.escape(brand.get("eyebrow") or ""), html.escape(brand.get("tagline") or brand.get("name") or ""), html.escape(doc_type))
     foot = '<div class="foot">%s</div>' % html.escape(brand.get("footer") or brand.get("contact") or "")
     themebar = '<div class="themebar" role="group" aria-label="Colour theme"><button type="button" data-t="light">Light</button><button type="button" data-t="system" class="on">System</button><button type="button" data-t="dark">Dark</button></div>'
-    css = HTML_CSS.replace("__ACCENT__", brand.get("accent") or "#1E3A8A")
-    return '<meta charset="utf-8"><title>%s</title><style>%s</style>%s%s%s<div class="wrap">%s%s</div>' % (
-        html.escape(title), css, THEME_JS.replace("__THEME_DEFAULT__", theme_default), themebar, band, md_to_html(md), foot)
+    import safety
+    accent = brand.get("accent") or "#1E3A8A"
+    css = HTML_CSS.replace("__ACCENT__", accent if safety.COLOR_RE.match(str(accent).strip()) else "#1E3A8A")
+    return '<meta charset="utf-8"><title>%s</title>%s<style>%s</style>%s%s%s<div class="wrap">%s%s</div>' % (
+        html.escape(title), safety.CSP_META, css, THEME_JS.replace("__THEME_DEFAULT__", theme_default if theme_default in ("light", "dark", "system") else "system"), themebar, band, md_to_html(md), foot)
 
 
 # --------------------------------------------------------------------------- main

@@ -335,12 +335,12 @@ python scripts/run_pipeline.py --manifest manifest.json --only report,analyze,bu
 
 | File | SHA-256 |
 |---|---|
-| compile_ai_logs.py | `e22cd6d26f44d77324354da3534b948f4a7a30c25fe7f1018343ce92e2a87066` |
+| compile_ai_logs.py | `293bb6f72cbd1e02ab87d8797997c3a77a8b0d7700910e7c35a339fd17db865e` |
 | analyze_events.py | `8afe1edae8d10bbe4a64e07ba78168ad8b90464bfed638041581b1f565a18853` |
-| build_report.py | `286ba286628b992bdf95a6daa0f0a91e89ddc7a9c0b8d0dabd8aa7dcc277dadf` |
+| build_report.py | `4b990a3d290256899a26cb19385ab25036fb0e619d0cec2f265787d799ec73c8` |
 | pricing.json | `d7690e151fffd3cd506def4d2346cccbbf80ddf19fcdf6d9dfddcf0afcead1fc` |
-| summary.json | `67cdcab26f0bcb8e46ea4aba90d21066fd4c2b831e36033186f1988af9decbc0` |
-| analysis.json | `1e36bbb6bd5d44792516a42e29b37bdef46147476bfb0edaef0c8f75c6c71cb0` |
+| summary.json | `4295e94dcb6be427f0912c0e828b1323d43d9dee0cb381e51c5d5143b9dd4b62` |
+| analysis.json | `3bac1d1b5a6898c997c3a782c45d2081209b13b4cffef3af7f81b78c7bf1cc53` |
 
 The event-level dataset (`compiled/all_events.csv`, 13 rows, one per model call with every token class, the pricing row applied, the account assigned and the source file path) is the primary artefact; every table above is an aggregation of it.
 

@@ -2,7 +2,7 @@
 name: ai-usage-ledger
 description: >-
   Compile every locally recorded AI coding-agent model call (Claude Code, Codex CLI/Desktop, GitHub Copilot CLI, Gemini CLI, opencode, OpenClaw, Cline/Roo/Kilo, aider, Kimi Code, Mistral Vibe, Continue, pi, Codebuff and any JSON-logging tool) across all drives, user profiles, WSL distros and SSH hosts into one append-only, de-duplicated ledger stored as SQLite, JSON or CSV; price it at list API rates; split it by subscription account and billing plan; validate it against the tools' own counters; and render a branded light/dark dashboard plus a research-grade study package. Onboards once (branding, theme, storage backend, scheduled refresh, anonymised publication copy; hosts and accounts auto-detected per OS), remembers the preferences, refreshes with one command or on a schedule, renders fifteen ledger documents (statements, memos, briefs, billing evidence) as Markdown, HTML, PDF and DOCX, can anonymise everything for publication, optionally archives the raw log files themselves so they outlive the tools' retention, and answers detailed questions (per day, project, account, model, session, prompt text, or inside the archived logs) through a query layer over the accumulated store. Use when asked to "find all my AI logs", "how many tokens did I use", "what would this have cost on the API", "compare my subscriptions", "usage by account", "cache savings", "set up my usage ledger", "monthly usage statement", "publish my usage anonymously", "how much did I use last Tuesday", "which sessions cost the most", "when did I first use model X", "find the session where I asked about Y", or to refresh an existing ledger.
-version: 1.5.0
+version: 1.5.1
 metadata:
   openclaw:
     skillKey: ai-usage-ledger
@@ -78,6 +78,9 @@ metadata:
 | Confidence | Every finding and every attribution rule carries a confidence level and its evidence. |
 | Unknowns | Price unpublished models at a stated sibling marked `assumed`; report the share of cost that rests on them. |
 | Corrections | When a rerun changes a previously reported figure, state the cause alongside the new number. |
+| Trusted input | `manifest.json`, `config.json`, `accounts.json`, `pricing.json` and `report_config.json` are executable configuration: they name hosts to reach over SSH or WSL and text to render. Keep them owner-writable only (the scripts warn otherwise) and never populate them from untrusted content. |
+| No shells | Local commands are argument lists (no `os.system`, no `shell=True`); remote SSH and WSL command words are validated against a strict grammar (`safety.py`) and quoted; the CSV merge sort is Python, not `sort`. |
+| Rendering | Branding text is HTML-escaped; colours, theme tokens and fonts are validated; the logo must be a local file (inlined as a data URI); `extra_css` needs `unsafe_extra_css: true` and may not contain `</`, `@import` or `url(`. |
 
 ## Resource Guide
 
@@ -108,6 +111,8 @@ metadata:
 | `tests/make_fixtures.py` | Synthetic logs and totals check for every parser. |
 | `tests/make_onboarding_example.py`, `assets/examples/example-onboarding.md` | The onboarding, question by question, on a synthetic machine; show it to an operator before asking the questions in chat. |
 | `tests/test_store.py` | Every backend ingests once and skips the repeat; non-interactive onboarding; two `ledger.py run`s end with zero new rows and archive every source file exactly once; the anonymised copy holds no fixture host, path or e-mail; schedule dry-runs; presets, SQL, prompt search and archived-log search return the expected rows; all fifteen documents render with no ledger placeholder left. |
+| `tests/test_security.py` | Shell syntax in the output directory, SSH and WSL manifest fields, the scheduler wrapper and branding stays literal or is refused; generated pages carry a CSP and no external references. |
+| `scripts/safety.py` | The validation and escaping helpers the pipeline, renderers and scheduler share. |
 
 ## Runtime Permissions
 
@@ -134,12 +139,12 @@ metadata:
 | List ledger documents | `python3 scripts/ledger.py doc --list [--stage finance] [--type memo]` |
 | Render a document | `python3 scripts/ledger.py doc --template monthly-usage-statement --var prepared_for="Finance" --var month=2026-08 --pdf --docx` |
 | Render from the anonymised copy | `python3 scripts/ledger.py doc --template executive-summary --anonymize --pdf` |
-| Scheduled refresh | `python3 scripts/ledger.py schedule install --frequency daily --time 03:00` · `schedule status` · `schedule remove` (`--dry-run` prints the command only) |
+| Scheduled refresh | `python3 scripts/ledger.py schedule install --frequency daily --time 03:00` · `schedule status` · `schedule remove` (`--dry-run` prints the wrapper contents and the command only; the wrapper carries `--anonymize` / `--archive` flags at most, nothing free-form) |
 | Raw-log archive | `python3 scripts/ledger.py archive status` · `archive list --host wsl-ubuntu --grep-path 2026/08` · `archive grep "ECONNRESET" --since 2026-08-01` · `archive restore --host lighthouse --to /tmp/restored --match sessions/2026/08` · one-off: `ledger.py run --archive` |
 | Detailed questions | `python3 scripts/ledger.py query --presets` · `query totals --since 2026-08-01` · `query by-project --tool codex --since 2026-08-01 --until 2026-08-31 --limit 10` · `query sessions --project libreevolve` · `query session --session <id>` · `query prompts --grep "rate limit"` · `query sql "SELECT ..."` · `query logs "pattern" --since 2026-08-01` |
 | Just look at what is on this machine | `python3 scripts/detect_hosts.py --all-profiles` (`--json` for the manifest shape) |
 | Manual pipeline (no store) | `python3 scripts/run_pipeline.py --manifest manifest.json [--only report,analyze,build] [--hosts a,b]` |
-| Parser and store self-tests | `python3 tests/make_fixtures.py` · `python3 tests/test_store.py` |
+| Parser, store and security self-tests | `python3 tests/make_fixtures.py` · `python3 tests/test_store.py` · `python3 tests/test_security.py` |
 | Quality gate | `python3 scripts/validate_quality.py` |
 
 | Preference key (`--set`) | Values |
@@ -168,7 +173,7 @@ metadata:
 | Brand preset | `examples/report_config.completetech.json`: CompleteTech LLC logo, eyebrow, tagline, contact, footer and palette (`#1E3A8A` accent, `#0F172A` ink, `#EEF2FF` soft accent, `#64748B` muted, `#E2E8F0` border, `#F8FAFC` zebra). |
 | Logo | `assets/logo.png`, inlined as a data URI so both pages stay self-contained. |
 | Themes | Light, dark and system in both pages via `prefers-color-scheme`, a fixed Light / System / Dark toggle persisted in the browser, and an explicit `data-theme` stamp from a host. |
-| Overrides | `branding.light` / `branding.dark` may set any token (`bg`, `surface`, `surface-2`, `ink`, `ink-2`, `ink-3`, `line`, `line-2`, tool colours, `seq1..seq7`); fonts via `google_fonts_url`; `extra_css` appended verbatim. Keep tool colours CVD-safe. |
+| Overrides | `branding.light` / `branding.dark` may set any token (`bg`, `surface`, `surface-2`, `ink`, `ink-2`, `ink-3`, `line`, `line-2`, tool colours, `seq1..seq7`) to a plain CSS colour or length; `font_display` / `font_body` / `font_mono` name locally installed fonts; `google_fonts_url` is honoured only with `allow_external_resources: true`; `extra_css` only with `unsafe_extra_css: true`. Keep tool colours CVD-safe. |
 
 ## Store and De-duplication
 
@@ -245,5 +250,6 @@ Accounts in `query` come from the same `accounts.json` rules the report uses (`a
 | Boundary | Requirement |
 |---|---|
 | Local-only runtime | The scripts make no outbound network calls; SSH and WSL are used only for hosts the operator names in the manifest. |
+| Generated pages | The dashboard, study and documents are self-contained: no external fonts, images or stylesheets, and a `Content-Security-Policy` meta tag that forbids network loads. A remote logo or Google Fonts stylesheet is used only when `branding.allow_external_resources` is true. |
 | Publishing | Dashboards and study packages are published only when the operator asks (Artifacts, files, or a repository). |
 | Data | Scanned transcripts and the compiled ledger never leave the operator's machines through this skill. |
