@@ -125,9 +125,15 @@ def run_fixture_suite() -> None:
     if result.returncode != 0 or "STORE OK" not in result.stdout:
         sys.stderr.write(result.stderr)
         raise RuntimeError("store / onboarding suite failed")
+    print("store suite ok")
+    result = subprocess.run([sys.executable, str(ROOT / "tests" / "test_security.py")], cwd=ROOT, capture_output=True, text=True, env=env)
+    sys.stdout.write(result.stdout)
+    if result.returncode != 0 or "SECURITY OK" not in result.stdout:
+        sys.stderr.write(result.stderr)
+        raise RuntimeError("security suite failed")
     shutil.rmtree(ROOT / "tests" / "fixtures", ignore_errors=True)
     shutil.rmtree(ROOT / "tests" / "out", ignore_errors=True)
-    print("store suite ok")
+    print("security suite ok")
 
 
 def frontmatter() -> dict[str, Any]:
@@ -200,6 +206,21 @@ def assert_dependency(openclaw: dict[str, Any], package: str) -> None:
         raise RuntimeError(f"metadata.openclaw.install must declare {package}")
 
 
+def validate_self_contained_pages() -> None:
+    """Committed example pages must not reference anything on the network and must carry a CSP."""
+    ext = re.compile(r"""(?:src|href)\s*=\s*["']https?://""", re.IGNORECASE)
+    for name in ("example.html", "example-study.html"):
+        path = ROOT / "assets" / "examples" / name
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if ext.search(text) or "fonts.googleapis" in text:
+            raise RuntimeError(f"{name} references an external resource; generated pages must be self-contained")
+        if "Content-Security-Policy" not in text:
+            raise RuntimeError(f"{name} has no Content-Security-Policy meta tag")
+    print("self-contained pages ok")
+
+
 def validate_clawhub_bundle() -> None:
     data = frontmatter()
     name = data.get("name")
@@ -259,6 +280,7 @@ def main() -> int:
     smoke_pipeline()
     if not args.skip_fixtures:
         run_fixture_suite()
+    validate_self_contained_pages()
     validate_clawhub_bundle()
     print("quality validation ok")
     return 0

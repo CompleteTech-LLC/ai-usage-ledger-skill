@@ -1244,6 +1244,53 @@ def assign_account(e, AC):
     return "unattributed", "unknown", "low"
 
 
+def external_sort_csv(src, dst, header_line, chunk_rows=400000):
+    """Sort a headerless CSV by its first field (the ISO timestamp) into dst with a header; chunked merge sort on disk."""
+    import heapq
+    import tempfile
+    chunks = []
+    tmpdir = tempfile.mkdtemp(prefix="ledger-sort-", dir=os.path.dirname(os.path.abspath(dst)) or None)
+    try:
+        with open(src, "r", encoding="utf-8", newline="") as fh:
+            buf = []
+            for line in fh:
+                if not line.strip():
+                    continue
+                buf.append(line)
+                if len(buf) >= chunk_rows:
+                    buf.sort(key=lambda ln: ln.split(",", 1)[0])
+                    p = os.path.join(tmpdir, "chunk-%d.csv" % len(chunks))
+                    with open(p, "w", encoding="utf-8", newline="") as out:
+                        out.writelines(buf)
+                    chunks.append(p)
+                    buf = []
+            if buf or not chunks:
+                buf.sort(key=lambda ln: ln.split(",", 1)[0])
+                p = os.path.join(tmpdir, "chunk-%d.csv" % len(chunks))
+                with open(p, "w", encoding="utf-8", newline="") as out:
+                    out.writelines(buf)
+                chunks.append(p)
+        handles = [open(p, "r", encoding="utf-8", newline="") for p in chunks]
+        try:
+            with open(dst, "w", encoding="utf-8", newline="") as out:
+                out.write(header_line)
+                for line in heapq.merge(*handles, key=lambda ln: ln.split(",", 1)[0]):
+                    out.write(line)
+        finally:
+            for h in handles:
+                h.close()
+    finally:
+        for p in chunks:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        try:
+            os.rmdir(tmpdir)
+        except OSError:
+            pass
+
+
 def cmd_report(a):
     os.makedirs(a.out_dir, exist_ok=True)
     cols = ["ts", "date", "tool", "host", "session", "kind", "model", "effort", "entrypoint", "version", "cwd",
@@ -1309,16 +1356,11 @@ def cmd_report(a):
                             r["cost_if_uncached_usd"] += nocache
                             r["cache_savings_usd"] += nocache - cost
                             r["sessions"].add(e.get("session"))
-    # sort merged CSV by timestamp (first column) without holding it in memory
+    # sort merged CSV by timestamp (first column) without holding it in memory: a Python external merge sort,
+    # no shell involved (paths never become part of a command line)
     final = os.path.join(a.out_dir, "all_events.csv")
-    with open(final, "w", newline="", encoding="utf-8") as f:
-        f.write(",".join(cols) + "\n")
-    rc = os.system('sort -t, -k1,1 "%s" >> "%s"' % (unsorted, final))
-    if rc != 0:
-        sys.stderr.write("sort failed (rc=%s); all_events.csv left unsorted\n" % rc)
-        os.replace(unsorted, final)
-    else:
-        os.remove(unsorted)
+    external_sort_csv(unsorted, final, ",".join(cols) + "\n")
+    os.remove(unsorted)
     sys.stderr.write("merged %d events\n" % n_events)
 
     def write_agg(name, keynames, d):

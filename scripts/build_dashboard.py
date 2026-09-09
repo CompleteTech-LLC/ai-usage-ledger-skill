@@ -4,6 +4,9 @@ import glob
 import json
 import os
 import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import safety  # noqa: E402
+import html as _html  # noqa: E402
 
 src = sys.argv[1] if len(sys.argv) > 1 else "compiled/summary.json"
 dst = sys.argv[2] if len(sys.argv) > 2 else "compiled/agent-ledger.html"
@@ -63,8 +66,10 @@ def _logo_data_uri(path, base_dir=None):
 
 
 def brand_blocks(cfg, base_dir=None):
-    """Return (style_override_html, header_html, footer_html, google_fonts_link) from cfg['branding']."""
-    b = (cfg or {}).get("branding") or {}
+    """Return (style_override_html, header_html, footer_html, fonts_link) from cfg['branding'], all values sanitised
+    by safety.sanitize_branding: text is HTML-escaped, colours/tokens/fonts validated, the logo is a local file
+    turned into a data URI, remote resources and extra CSS only when explicitly allowed."""
+    b = safety.sanitize_branding((cfg or {}).get("branding") or {}, base_dir, _logo_data_uri)
     vars_ = []
     if b.get("accent"):
         vars_.append("--focus:%s;--brand-accent:%s" % (b["accent"], b["accent"]))
@@ -83,25 +88,25 @@ def brand_blocks(cfg, base_dir=None):
     style += b.get("extra_css", "") + "</style>"
     header = ""
     if b.get("logo") or b.get("name") or b.get("eyebrow"):
-        logo = _logo_data_uri(b.get("logo"), base_dir)
         text = "".join([
             ('<div class="eyebrow">%s</div>' % b["eyebrow"]) if b.get("eyebrow") else "",
             ('<div class="name">%s</div>' % b["name"]) if b.get("name") else "",
             ('<div class="tagline">%s</div>' % b["tagline"]) if b.get("tagline") else "",
         ])
         header = '<div class="brand">%s<div>%s</div>%s</div>' % (
-            ('<img src="%s" alt="%s">' % (logo, b.get("name", "logo"))) if logo else "",
+            ('<img src="%s" alt="%s">' % (b["logo"], b.get("name", "logo"))) if b.get("logo") else "",
             text,
             ('<div class="contact">%s</div>' % b["contact"]) if b.get("contact") else "")
     footer = ('<div class="brandfoot">%s</div>' % b["footer"]) if b.get("footer") else ""
-    link = ('<link rel="stylesheet" href="%s">' % b["google_fonts_url"]) if b.get("google_fonts_url") else ""
+    link = (safety.CSP_META_EXTERNAL if b.get("allow_external_resources") else safety.CSP_META)
+    if b.get("google_fonts_url"):
+        link += '<link rel="stylesheet" href="%s">' % b["google_fonts_url"]
     return style, header, footer, link
 
 payload = json.dumps(data).replace("</", "<\\/")
 
 THEMEBAR_HTML = '<div class="themebar" role="group" aria-label="Colour theme"><button type="button" data-t="light">Light</button><button type="button" data-t="system" class="on">System</button><button type="button" data-t="dark">Dark</button></div>'
-html = r"""<meta charset="utf-8"><title>Agent Token Ledger</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+html = r"""<meta charset="utf-8"><title>__PAGE_TITLE__</title>
 <style>
 :root{
   color-scheme:light;
@@ -647,7 +652,8 @@ function niceStep(x){ const p = Math.pow(10, Math.floor(Math.log10(x))); const f
 html = html.replace("__DATA__", payload)
 _style, _header, _footer, _link = brand_blocks(CFG, os.path.dirname(os.path.abspath(sys.argv[3])) if len(sys.argv) > 3 else None)
 html = html.replace("__BRAND_STYLE__", _link + _style).replace("__BRAND_HEADER__", _header).replace("__BRAND_FOOTER__", _footer).replace("__THEMEBAR__", THEMEBAR_HTML)
-html = html.replace("__THEME_DEFAULT__", str(CFG.get("theme_default") or "system"))
+html = html.replace("__THEME_DEFAULT__", str(CFG.get("theme_default") or "system") if str(CFG.get("theme_default") or "system") in ("light", "dark", "system") else "system")
+html = html.replace("__PAGE_TITLE__", _html.escape(str(CFG.get("dashboard_title") or "Agent Token Ledger"), quote=True))
 os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
 open(dst, "w", encoding="utf-8").write(html)
 print("wrote", dst, len(html) // 1024, "KB")

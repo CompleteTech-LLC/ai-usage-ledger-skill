@@ -16,6 +16,7 @@ Standard library only.
 """
 import argparse
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -37,21 +38,43 @@ def wrapper_path(home):
     return os.path.join(home, "run-ledger.cmd" if IS_WIN else "run-ledger.sh")
 
 
-def write_wrapper(home, python, extra_args=""):
-    os.makedirs(os.path.join(home, "logs"), exist_ok=True)
+RUN_FLAGS = {"anonymize": "--anonymize", "archive": "--archive"}  # the only options a scheduled run may carry
+
+
+def _check_plain(value, what):
+    if re.search(r"[\x00-\x1f\x7f]", str(value)):
+        raise SystemExit("%s contains a control character and was refused" % what)
+    return str(value)
+
+
+def wrapper_body(home, python, flags=()):
+    """The scheduled command as a script. Every word is quoted for the platform; flags come from RUN_FLAGS only."""
     ledger = os.path.join(HERE, "ledger.py")
     log = os.path.join(home, "logs", "run.log")
-    p = wrapper_path(home)
+    for v, what in ((home, "ledger home"), (python, "python path")):
+        _check_plain(v, what)
+    args = [RUN_FLAGS[f] for f in flags if f in RUN_FLAGS]
     if IS_WIN:
-        body = '@echo off\r\nset "AI_USAGE_LEDGER_HOME=%s"\r\necho [%%date%% %%time%%] scheduled run >> "%s"\r\n"%s" "%s" run %s >> "%s" 2>&1\r\n' % (home, log, python, ledger, extra_args, log)
+        cmdline = subprocess.list2cmdline([python, ledger, "run"] + args)
+        if any(ch in home + log for ch in "%!^&|<>\""):
+            raise SystemExit("ledger home path contains a character that cannot be placed safely in a batch file: %r" % home)
+        return '@echo off\r\nset "AI_USAGE_LEDGER_HOME=%s"\r\necho [%%date%% %%time%%] scheduled run >> "%s"\r\n%s >> "%s" 2>&1\r\n' % (home, log, cmdline, log)
+    words = " ".join(shlex.quote(x) for x in [python, ledger, "run"] + args)
+    return "#!/bin/sh\nexport AI_USAGE_LEDGER_HOME=%s\necho \"[$(date -Iseconds)] scheduled run\" >> %s\n%s >> %s 2>&1\n" % (shlex.quote(home), shlex.quote(log), words, shlex.quote(log))
+
+
+def write_wrapper(home, python, flags=()):
+    os.makedirs(os.path.join(home, "logs"), exist_ok=True)
+    p = wrapper_path(home)
+    body = wrapper_body(home, python, flags)
+    if IS_WIN:
         with open(p, "w", encoding="utf-8", newline="") as fh:
             fh.write(body)
     else:
-        body = "#!/bin/sh\nexport AI_USAGE_LEDGER_HOME=%s\necho \"[$(date -Iseconds)] scheduled run\" >> %s\n%s %s run %s >> %s 2>&1\n" % (
-            shlex.quote(home), shlex.quote(log), shlex.quote(python), shlex.quote(ledger), extra_args, shlex.quote(log))
-        with open(p, "w", encoding="utf-8", newline="\n") as fh:
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(body)
-        os.chmod(p, 0o755)
+        os.chmod(p, 0o700)
     return p
 
 
@@ -72,11 +95,14 @@ def crontab_lines():
     return [line for line in r.stdout.splitlines()]
 
 
-def install(home, python, frequency, time_, weekday="mon", extra_args="", dry_run=False):
+def install(home, python, frequency, time_, weekday="mon", flags=(), dry_run=False):
+    if not re.fullmatch(r"\d{1,2}:\d{2}", str(time_ or "")):
+        raise SystemExit("time must be HH:MM")
     hh, mm = parse_time(time_)
-    wrapper = write_wrapper(home, python, extra_args) if not dry_run else wrapper_path(home)
     if frequency == "none":
         return remove(home, dry_run)
+    print("wrapper %s will contain:\n%s" % (wrapper_path(home), "".join("    " + ln + "\n" for ln in wrapper_body(home, python, flags).splitlines())))
+    wrapper = write_wrapper(home, python, flags) if not dry_run else wrapper_path(home)
     if IS_WIN:
         cmd = ["schtasks", "/Create", "/F", "/TN", TASK_NAME, "/TR", '"%s"' % wrapper, "/ST", "%02d:%02d" % (hh, mm)]
         if frequency == "daily":
@@ -145,14 +171,16 @@ def main():
     i.add_argument("--frequency", default="daily", choices=["none", "daily", "weekly", "monthly"])
     i.add_argument("--time", default="03:00", help="HH:MM local time")
     i.add_argument("--weekday", default="mon", choices=sorted(WEEKDAYS))
-    i.add_argument("--extra-args", default="", help="appended to `ledger.py run`, e.g. --anonymize")
+    i.add_argument("--anonymize", action="store_true", help="the scheduled run also builds the anonymised copy")
+    i.add_argument("--archive-raw", action="store_true", help="the scheduled run also archives the raw log files")
     i.add_argument("--dry-run", action="store_true", help="print the command without changing anything")
     r = sub.add_parser("remove")
     r.add_argument("--dry-run", action="store_true")
     sub.add_parser("status")
     a = ap.parse_args()
     if a.cmd == "install":
-        return install(a.home, a.python, a.frequency, a.time, a.weekday, a.extra_args, a.dry_run)
+        flags = [f for f, on in (("anonymize", a.anonymize), ("archive", a.archive_raw)) if on]
+        return install(a.home, a.python, a.frequency, a.time, a.weekday, flags, a.dry_run)
     if a.cmd == "remove":
         return remove(a.home, a.dry_run)
     return status(a.home)

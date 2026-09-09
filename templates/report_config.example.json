@@ -26,11 +26,13 @@
     "python scripts/run_pipeline.py --manifest manifest.json --only report,analyze,build"
   ],
   "branding": {
-    "_comment": "All optional. logo is a URL or data: URI; accent recolours focus rings and the brand accent variable; light/dark override any CSS token (bg, surface, surface-2, ink, ink-2, ink-3, line, line-2, codex, claude, copilot, opencode, openclaw, seq1..seq7); fonts must be loaded via google_fonts_url or be installed; extra_css is appended verbatim.",
+    "_comment": "All optional. logo is a local image file (inlined as a data URI) or a data: URI; a remote https logo and google_fonts_url are used only when allow_external_resources is true. accent must be a CSS colour; light/dark override any CSS token (bg, surface, surface-2, ink, ink-2, ink-3, line, line-2, codex, claude, copilot, opencode, openclaw, seq1..seq7) with a plain CSS value; fonts name locally installed faces; extra_css is appended only when unsafe_extra_css is true and may not contain </, @import or url(). Text values are HTML-escaped.",
     "name": "Your Studio",
     "logo": "",
     "accent": "#0b7a75",
     "footer": "Prepared by Your Studio \u00b7 confidential",
+    "allow_external_resources": false,
+    "unsafe_extra_css": false,
     "google_fonts_url": "",
     "font_display": "",
     "font_body": "",

@@ -39,6 +39,10 @@ Runtime requirements are declared in `SKILL.md` under `metadata.openclaw`.
 
 The skill reads agent transcripts and credential files on the user's own machines to identify accounts. It decodes identity claims only and never copies, prints, or transmits tokens. Publishing the skill bundle never includes any scanned data; `scans/`, `compiled/` and `reports/` are excluded.
 
+## Security Audit Response
+
+ClawHub's audit of 1.5.0 reported shell command injection through the report output directory (`os.system` sort), through unquoted SSH manifest fields, and through the scheduler's free-form extra arguments, plus unescaped branding in generated HTML and external Google Fonts requests. 1.5.1 replaces the shell sort with a Python merge sort, validates and quotes every remote command word, removes free-form scheduler arguments, escapes and validates branding, inlines all resources with a Content-Security-Policy, warns on group- or world-writable configuration, and adds `tests/test_security.py` to the quality gate.
+
 ## Local Readiness Check
 
 Run before publishing:
