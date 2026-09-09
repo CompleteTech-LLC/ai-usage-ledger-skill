@@ -82,6 +82,7 @@ flowchart LR
 - `templates/` - manifest, pricing sheet, account and report-config examples.
 - `examples/` - a workstation manifest and the CompleteTech brand preset.
 - `references/` - harness and runtime catalog (forty-plus tools), log formats, discovery and account attribution, pitfalls, harness notes, the ledger document catalog and its `template-index.json`.
+- `requirements.txt` - quality-validator dependencies plus the optional libraries for branded PDF / DOCX rendering.
 - `tests/make_fixtures.py` - synthetic logs and totals check for every parser.
 - `tests/test_store.py` - backend de-duplication, non-interactive onboarding and a double `ledger.py run` on the fixtures.
 
