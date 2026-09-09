@@ -90,7 +90,7 @@ metadata:
 | `references/harness-catalog.md` | Forty-plus agents, IDE assistants, gateways and runtimes: paths per OS, record shapes, token fields, scanner support. |
 | `references/log-formats.md` | Exact fields per built-in parser, de-duplication and replay rules, normalised schema. |
 | `references/discovery.md` | Where logs and credentials live, sweep commands, reading accounts safely, defensible attribution rules. |
-| `references/pitfalls.md` | Sixteen ways the numbers go wrong. |
+| `references/pitfalls.md` | Seventeen ways the numbers go wrong. |
 | `references/harnesses.md` | Install locations and notes for Claude Code, Codex, Cursor, SSH, WSL and macOS. |
 | `references/ledger-document-catalog.md` | Fifteen ledger documents (executive summary, monthly statement, quarterly review, account statement, subscription memo and renewal recommendation, cache brief, budget forecast, project allocation, billing evidence, model mix, tool adoption, host inventory, data-quality note, correction notice) with their placeholders. |
 | `references/template-index.json` | Machine-readable index of the catalog used by the renderer. |

@@ -92,13 +92,22 @@ def scan_host(host, scans_dir, python="python"):
         wsl_out = "/mnt/" + win_out[0].lower() + win_out[2:].replace("\\", "/")
         wsl_scanner = "/mnt/" + SCANNER[0].lower() + SCANNER[2:].replace("\\", "/")
         cmd = " ".join([shlex.quote(wsl_python), shlex.quote(wsl_scanner)] + [shlex.quote(x) for x in scan_args(host)] + ["--out-dir", shlex.quote(wsl_out)])
-        r = run(["wsl.exe", "-d", distro, "--", "bash", "-lc", cmd], check=False)
-        done = os.path.isfile(os.path.join(out_dir, "inventory.%s.json" % name))
-        if r.returncode != 0 or not done:
+        # the WSL service intermittently refuses calls under load (Wsl/Service/0x8007274c); retry before falling back,
+        # because a scan over the \wsl$ share can silently miss files (9P errors) and is four times slower
+        done = False
+        for attempt in range(1, int(host.get("wsl_attempts", 3)) + 1):
+            r = run(["wsl.exe", "-d", distro, "--", "bash", "-lc", cmd], check=False)
+            done = r.returncode == 0 and os.path.isfile(os.path.join(out_dir, "inventory.%s.json" % name))
+            if done:
+                break
+            log("WSL scan attempt %d for %s failed (rc=%s)%s" % (attempt, name, r.returncode, "; retrying in 30 s" if attempt < int(host.get("wsl_attempts", 3)) else ""))
+            if attempt < int(host.get("wsl_attempts", 3)):
+                time.sleep(30)
+        if not done:
             share = host.get("share_fallback")
             if not share:
                 raise SystemExit("WSL scan failed for %s and no share_fallback given" % name)
-            log("WSL service refused the call; falling back to the share %s" % share)
+            log("WSL service refused the call; falling back to the share %s (slower, and file counts can come up short: compare the inventory with a native `find` and rescan the host with `ledger.py run --hosts %s` once WSL responds)" % (share, name))
             alt = dict(host)
             for key in ("claude_roots", "codex_roots", "copilot_roots", "opencode_dbs", "openclaw_roots", "gemini_roots", "qwen_roots", "aider_roots", "kimi_roots", "vibe_roots", "continue_roots", "pi_roots"):
                 alt[key] = [share.rstrip("/\\") + p for p in host.get(key, [])]
