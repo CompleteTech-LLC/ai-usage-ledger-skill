@@ -174,7 +174,7 @@ def onboard(args):
     print("\nDetecting agent logs on this machine%s..." % (" and its WSL distros" if cfg["detect"]["wsl"] and detect_hosts.IS_WIN else ""))
     hosts, notes = detect_hosts.detect_hosts(all_profiles=cfg["detect"]["all_profiles"], probe_wsl=cfg["detect"]["wsl"])
     for h in hosts:
-        print("  [%s] %s" % (h["name"], "; ".join(h.get("_found", []))[:200]))
+        print("  [%s] %s" % (h["name"], "; ".join(h.get("_found", []))[:400]))
     for n in notes:
         print("  note:", n)
     accounts = detect_hosts.draft_accounts(hosts)

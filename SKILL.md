@@ -103,6 +103,7 @@ metadata:
 | `scripts/analyze_events.py` | Distributions, time of day, concentration, validation, sensitivity. |
 | `scripts/build_dashboard.py`, `scripts/build_report.py` | Branded dashboard and study package. |
 | `tests/make_fixtures.py` | Synthetic logs and totals check for every parser. |
+| `tests/make_onboarding_example.py`, `assets/examples/example-onboarding.md` | The onboarding, question by question, on a synthetic machine; show it to an operator before asking the questions in chat. |
 | `tests/test_store.py` | Every backend ingests once and skips the repeat; non-interactive onboarding; two `ledger.py run`s end with zero new rows; the anonymised copy holds no fixture host, path or e-mail; schedule dry-runs; all fifteen documents render with no ledger placeholder left. |
 
 ## Runtime Permissions
