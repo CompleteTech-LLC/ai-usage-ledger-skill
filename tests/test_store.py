@@ -80,7 +80,8 @@ def check_cli(scan_dir):
     env = dict(os.environ, AI_USAGE_LEDGER_HOME=home)
     py = sys.executable
     ledger = os.path.join(SCRIPTS, "ledger.py")
-    run([py, ledger, "init", "--yes", "--set", "store.kind=json", "--set", "brand.name=Fixture Co", "--set", "detect.wsl=n", "--set", "workdir=" + os.path.join(OUT, "cli-work")], env=env)
+    run([py, ledger, "init", "--yes", "--set", "store.kind=json", "--set", "brand.name=Fixture Co", "--set", "detect.wsl=n", "--set", "workdir=" + os.path.join(OUT, "cli-work"),
+         "--set", "archive.raw_logs=y", "--set", "archive.path=" + os.path.join(OUT, "archive")], env=env)
     cfg = json.load(open(os.path.join(home, "config.json"), encoding="utf-8"))
     ok = cfg["store"]["kind"] == "json" and cfg["branding"]["name"] == "Fixture Co" and os.path.isfile(cfg["manifest_path"]) and os.path.isfile(cfg["accounts_path"]) and os.path.isfile(cfg["pricing_path"])
     print("init:    config %s, store %s, brand %s  %s" % (os.path.basename(home), cfg["store"]["kind"], cfg["branding"]["name"], "OK" if ok else "FAIL"))
@@ -101,6 +102,24 @@ def check_cli(scan_dir):
     dash = os.path.join(cfg["workdir"], "compiled", "agent-ledger.html")
     pkgs = [d for d in os.listdir(os.path.join(cfg["workdir"], "reports")) if d.endswith(".zip")] if os.path.isdir(os.path.join(cfg["workdir"], "reports")) else []
     good = counts["events"] == n and last and last["added"]["events"] == 0 and counts["runs"] == 2 and os.path.isfile(dash) and pkgs and "Fixture Co" in open(dash, encoding="utf-8").read()
+    # raw-log archive: every source file the scanners read is archived once; the second run archives nothing new
+    srcs = set()
+    for fn in ("events.fixture.jsonl", "sessions.fixture.jsonl"):
+        for line in open(os.path.join(scan_dir, fn), encoding="utf-8"):
+            d = json.loads(line)
+            if d.get("src") or d.get("file"):
+                srcs.add(os.path.normcase(d.get("src") or d.get("file")))
+    st = ledger_store.Store.open("json", cfg["store"]["path"])
+    runs = []
+    for line in open(os.path.join(cfg["store"]["path"], "runs.jsonl"), encoding="utf-8"):
+        runs.append(json.loads(line))
+    st.close()
+    a1, a2 = (runs[0].get("archive") or {}).get("fixture", {}), (runs[1].get("archive") or {}).get("fixture", {})
+    arch_dir = os.path.join(OUT, "archive", "fixture")
+    n_files = sum(len(f) for _, _, f in os.walk(arch_dir)) if os.path.isdir(arch_dir) else 0
+    agood = a1.get("new") == len(srcs) and a2.get("new", 0) == 0 and a2.get("updated", 0) == 0 and n_files == len(srcs)
+    print("archive: %d sources, first run new=%s, second run new=%s updated=%s, files on disk %d  %s" % (len(srcs), a1.get("new"), a2.get("new"), a2.get("updated"), n_files, "OK" if agood else "FAIL"))
+    good = good and agood
     print("run x2:  %d events in store (expected %d), second run added %s, runs %d, dashboard %s, package %s  %s" % (
         counts["events"], n, last["added"]["events"] if last else "?", counts["runs"], "yes" if os.path.isfile(dash) else "no", "yes" if pkgs else "no", "OK" if good else "FAIL"))
     if not good:
@@ -167,6 +186,25 @@ def check_cli(scan_dir):
     atxt = open(os.path.join(OUT, "docs", "anon.md"), encoding="utf-8").read() if os.path.isfile(os.path.join(OUT, "docs", "anon.md")) else ""
     if anon_doc.returncode != 0 or "fixture" in atxt or "Anonymised" not in atxt:
         bad.append(("executive-summary --anonymize", "leak or failure"))
+    # queries: presets, free SQL, prompts and archived raw logs
+    q1 = run([py, ledger, "query", "by-tool", "--format", "json"], env=env)
+    q2 = run([py, ledger, "query", "totals", "--since", "2026-04-01", "--until", "2026-04-30", "--format", "json"], env=env)
+    q3 = run([py, ledger, "query", "sql", "SELECT COUNT(*) AS c FROM events WHERE tool='codex'", "--format", "json"], env=env)
+    q4 = run([py, ledger, "query", "prompts", "--grep", "do the thing", "--format", "json"], env=env)
+    q5 = run([py, ledger, "query", "logs", "do the thing", "--format", "json"], env=env)
+    q6 = run([py, ledger, "query", "by-account", "--format", "json"], env=env)
+    q7 = run([py, ledger, "archive", "status"], env=env)
+    try:
+        j1, j2, j3, j4, j5, j6 = (json.loads(x.stdout) for x in (q1, q2, q3, q4, q5, q6))
+        qgood = len(j1) == 10 and j2[0]["calls"] == 2 and j3[0]["c"] == 3 and len(j4) == 1 and len(j5) >= 1 and any(r["account"] == "codex:example" for r in j6) and '"files"' in q7.stdout
+    except Exception as ex:
+        qgood = False
+        print("query parse error:", ex, q1.stdout[:200], q2.stdout[:200], q6.stdout[:200], q6.stderr[-300:])
+    print("query:   by-tool %s rows, totals(April) %s, sql %s, prompts grep %s, logs grep %s, by-account %s  %s" % (
+        len(j1) if qgood else "?", j2[0]["calls"] if qgood else "?", j3[0]["c"] if qgood else "?", len(j4) if qgood else "?", len(j5) if qgood else "?", "ok" if qgood else "?", "OK" if qgood else "FAIL"))
+    if not qgood:
+        sys.stdout.write("".join(x.stderr[-400:] for x in (q1, q2, q3, q4, q5, q6, q7)))
+    ok = ok and qgood
     lst = run([py, ledger, "doc", "--list"], env=env)
     if len([x for x in lst.stdout.splitlines() if x.strip()]) != len(idx):
         bad.append(("--list", "count mismatch"))

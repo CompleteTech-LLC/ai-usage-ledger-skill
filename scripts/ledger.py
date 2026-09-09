@@ -10,6 +10,9 @@ ledger.py - the one entry point people and agents use day to day.
     python3 scripts/ledger.py doc --list      # ledger documents (statements, memos, briefs) from the catalog
     python3 scripts/ledger.py doc --template executive-summary --pdf --docx
     python3 scripts/ledger.py schedule install|remove|status   # Task Scheduler / cron refresh
+    python3 scripts/ledger.py archive status|list|grep|restore # the raw logs themselves (archive.raw_logs=y)
+    python3 scripts/ledger.py query --presets                 # detailed questions over the store and the archive
+    python3 scripts/ledger.py query by-project --since 2026-08-01 --tool codex
     python3 scripts/ledger.py reinit          # fresh onboarding; the old store is kept aside with a timestamp
 
 Preferences (branding, storage backend, working directory, timezone, auto-detection) are captured once,
@@ -33,6 +36,7 @@ SKILL = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import anonymize  # noqa: E402
 import detect_hosts  # noqa: E402
+import ledger_archive  # noqa: E402
 import ledger_store  # noqa: E402
 import schedule  # noqa: E402
 
@@ -109,6 +113,8 @@ QUESTIONS = [
     ("detect.all_profiles", "Also scan other user profiles and other drives on this machine? (y/n)", lambda c: "y" if c["detect"]["all_profiles"] else "n", ["y", "n"]),
     ("detect.wsl", "Probe WSL distros on Windows? (y/n)", lambda c: "y" if c["detect"]["wsl"] else "n", ["y", "n"]),
     ("anonymize.on_every_run", "Also build an anonymised copy for publication on every run? (y/n)", lambda c: "y" if c["anonymize"]["on_every_run"] else "n", ["y", "n"]),
+    ("archive.raw_logs", "Archive the raw log files themselves (every transcript the scanners read), so they outlive the tools' retention? (y/n)", lambda c: "y" if c["archive"]["raw_logs"] else "n", ["y", "n"]),
+    ("archive.compress", "Compress the archive with gzip? (y/n; n keeps files re-scannable in place)", lambda c: "y" if c["archive"]["compress"] else "n", ["y", "n"]),
     ("schedule.frequency", "Refresh automatically? (none / daily / weekly / monthly)", lambda c: c["schedule"]["frequency"], ["none", "daily", "weekly", "monthly"]),
     ("schedule.time", "At what local time? (HH:MM)", lambda c: c["schedule"]["time"], None),
     ("schedule.weekday", "Weekday for a weekly refresh (mon..sun)", lambda c: c["schedule"]["weekday"], sorted(schedule.WEEKDAYS)),
@@ -126,6 +132,7 @@ def default_config():
         "report_config_path": os.path.join(home_dir(), "report_config.json"), "manifest_path": os.path.join(home_dir(), "manifest.json"),
         "package_prefix": "AI_Usage_Ledger", "extra_hosts": [],
         "anonymize": {"on_every_run": False, "salt": secrets.token_hex(16)},
+        "archive": {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")},
         "schedule": {"frequency": "none", "time": "03:00", "weekday": "mon", "install": False, "installed_at": None},
     }
 
@@ -140,6 +147,10 @@ def set_dotted(cfg, key, value):
         cfg["detect"][key[7:]] = value in ("y", "yes", "true", True)
     elif key == "anonymize.on_every_run":
         cfg.setdefault("anonymize", {"salt": secrets.token_hex(16)})["on_every_run"] = value in ("y", "yes", "true", True)
+    elif key in ("archive.raw_logs", "archive.compress"):
+        cfg.setdefault("archive", {"path": os.path.join(home_dir(), "archive")})[key[8:]] = value in ("y", "yes", "true", True)
+    elif key == "archive.path":
+        cfg.setdefault("archive", {})["path"] = value
     elif key == "schedule.install":
         cfg.setdefault("schedule", {})["install"] = value in ("y", "yes", "true", True)
     elif key.startswith("schedule."):
@@ -200,6 +211,7 @@ def onboard(args):
     if fresh or not cfg.get("initialized_at"):
         cfg["initialized_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     cfg.setdefault("anonymize", {"on_every_run": False, "salt": secrets.token_hex(16)})
+    cfg.setdefault("archive", {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")})
     cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon", "install": False, "installed_at": None})
     save_config(cfg)
     sch = cfg["schedule"]
@@ -266,6 +278,15 @@ def do_run(args):
     pipeline = os.path.join(HERE, "run_pipeline.py")
     if not args.no_scan:
         run([py, pipeline, "--manifest", cfg["manifest_path"], "--only", "scan"] + (["--hosts", args.hosts] if args.hosts else []))
+    archive_summary = None
+    if (cfg.get("archive", {}).get("raw_logs") or args.archive) and not args.no_scan:
+        with open(cfg["manifest_path"], encoding="utf-8") as fh:
+            mhosts = json.load(fh).get("hosts", [])
+        if args.hosts:
+            mhosts = [h for h in mhosts if h["name"] in args.hosts.split(",")]
+        ar = ledger_archive.Archive(cfg["archive"].get("path") or os.path.join(home_dir(), "archive"), compress=cfg["archive"].get("compress", True))
+        archive_summary = ledger_archive.archive_from_scans(ar, mhosts, os.path.join(work, "scans"))
+        ar.close()
     # append-only ingest
     st = ledger_store.Store.open(cfg["store"]["kind"], cfg["store"]["path"])
     added = {"events": 0, "sessions": 0, "prompts": 0}
@@ -301,7 +322,7 @@ def do_run(args):
     if args.anonymize or cfg.get("anonymize", {}).get("on_every_run"):
         anon_out = build_anonymized(cfg, st, work, py, pipeline)
     meta = {"started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "seconds": round(time.time() - t0, 1),
-            "added": added, "skipped": skipped, "store_counts": counts, "workdir": work, "anonymized": anon_out}
+            "added": added, "skipped": skipped, "store_counts": counts, "workdir": work, "anonymized": anon_out, "archive": archive_summary}
     st.record_run(meta)
     st.close()
     print("run recorded: %s events in store (%s added this run), %.0fs" % (counts["events"], added["events"], meta["seconds"]))
@@ -384,6 +405,17 @@ def do_status(args):
     print("schedule: %s%s" % (sch.get("frequency", "none"), (" at %s" % sch.get("time")) if sch.get("frequency", "none") != "none" else ""))
     schedule.status(home_dir())
     print("anonymise on every run: %s" % ("yes" if (cfg.get("anonymize") or {}).get("on_every_run") else "no"))
+    arc = cfg.get("archive") or {}
+    if arc.get("raw_logs"):
+        try:
+            ar = ledger_archive.Archive(arc["path"], compress=arc.get("compress", True))
+            s_ = ar.status()
+            ar.close()
+            print("archive:  %s files, %.2f GB original, %.2f GB on disk at %s" % (sum(h["files"] for h in s_["hosts"]), sum(h["bytes_original"] for h in s_["hosts"]) / 1e9, s_["bytes_on_disk"] / 1e9, arc["path"]))
+        except Exception as ex:
+            print("archive:  enabled, not readable yet (%s)" % ex)
+    else:
+        print("archive:  off (raw logs are not kept; enable with --set archive.raw_logs=y)")
     try:
         with open(cfg["manifest_path"], encoding="utf-8") as fh:
             m = json.load(fh)
@@ -435,6 +467,21 @@ def do_schedule(args):
     return schedule.status(home_dir())
 
 
+def do_archive(args):
+    cfg = load_config()
+    if cfg is None:
+        raise SystemExit("not initialised; run init first")
+    arc = cfg.get("archive") or {}
+    cmd = [sys.executable, os.path.join(HERE, "ledger_archive.py"), "--archive", arc.get("path") or os.path.join(home_dir(), "archive")]
+    if not arc.get("compress", True):
+        cmd.append("--no-compress")
+    return subprocess.run(cmd + args.rest).returncode
+
+
+def do_query(args):
+    return subprocess.run([sys.executable, os.path.join(HERE, "ledger_query.py")] + args.rest).returncode
+
+
 def do_doc(args):
     cmd = [sys.executable, os.path.join(HERE, "render_ledger_doc.py")] + args.rest
     r = subprocess.run(cmd)
@@ -465,6 +512,7 @@ def main():
     r.add_argument("--no-scan", action="store_true", help="rebuild from the store without rescanning")
     r.add_argument("--no-detect", action="store_true", help="do not refresh the manifest from detection")
     r.add_argument("--anonymize", action="store_true", help="also build the anonymised copy under <workdir>/anonymized")
+    r.add_argument("--archive", action="store_true", help="also archive the raw log files this once (archive.raw_logs=y does it every run)")
     r.set_defaults(fn=do_run)
     s = sub.add_parser("status")
     s.set_defaults(fn=do_status)
@@ -481,6 +529,12 @@ def main():
     sc.add_argument("--weekday", choices=sorted(schedule.WEEKDAYS))
     sc.add_argument("--dry-run", action="store_true")
     sc.set_defaults(fn=do_schedule)
+    arp = sub.add_parser("archive", help="raw-log archive: status, list, grep, restore (arguments pass through to ledger_archive.py)")
+    arp.add_argument("rest", nargs=argparse.REMAINDER)
+    arp.set_defaults(fn=do_archive)
+    qp = sub.add_parser("query", help="detailed questions over the store and archive (arguments pass through to ledger_query.py)")
+    qp.add_argument("rest", nargs=argparse.REMAINDER)
+    qp.set_defaults(fn=do_query)
     dc = sub.add_parser("doc", help="render a ledger document; all arguments pass through to render_ledger_doc.py")
     dc.add_argument("rest", nargs=argparse.REMAINDER)
     dc.set_defaults(fn=do_doc)
@@ -490,6 +544,10 @@ def main():
     ri.set_defaults(fn=do_reinit)
     if len(sys.argv) > 1 and sys.argv[1] == "doc":  # everything after `doc` belongs to the renderer, including --list
         sys.exit(subprocess.run([sys.executable, os.path.join(HERE, "render_ledger_doc.py")] + sys.argv[2:]).returncode)
+    if len(sys.argv) > 1 and sys.argv[1] == "query":
+        sys.exit(do_query(argparse.Namespace(rest=sys.argv[2:])))
+    if len(sys.argv) > 1 and sys.argv[1] == "archive":
+        sys.exit(do_archive(argparse.Namespace(rest=sys.argv[2:])))
     a = ap.parse_args()
     rc = a.fn(a)
     if isinstance(rc, int) and rc:

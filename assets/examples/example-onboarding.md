@@ -26,6 +26,8 @@ Timezone for time-of-day analysis [UTC]: America/New_York
 Also scan other user profiles and other drives on this machine? (y/n) [n]: y
 Probe WSL distros on Windows? (y/n) [y]: y
 Also build an anonymised copy for publication on every run? (y/n) [n]: y
+Archive the raw log files themselves (every transcript the scanners read), so they outlive the tools' retention? (y/n) [n]: y
+Compress the archive with gzip? (y/n; n keeps files re-scannable in place) [y]: y
 Refresh automatically? (none / daily / weekly / monthly) [none]: daily
 At what local time? (HH:MM) [03:00]: 03:00
 Weekday for a weekly refresh (mon..sun) [mon]: mon
@@ -54,7 +56,7 @@ The saved preferences (`~/.ai-usage-ledger/config.json`, salt omitted):
 ```json
 {
   "version": 1,
-  "initialized_at": "2026-09-09T17:41:21+00:00",
+  "initialized_at": "2026-09-09T18:06:01+00:00",
   "home": "~/.ai-usage-ledger",
   "store": {
     "kind": "sqlite",
@@ -117,6 +119,11 @@ The saved preferences (`~/.ai-usage-ledger/config.json`, salt omitted):
       "_comment": "edit roots in manifest.json"
     }
   ],
+  "archive": {
+    "raw_logs": true,
+    "compress": true,
+    "path": "~/.ai-usage-ledger/archive"
+  },
   "schedule": {
     "frequency": "daily",
     "time": "03:00",
@@ -134,7 +141,7 @@ python3 scripts/ledger.py init --yes \
   --set "brand.name=Northwind Trading Co." --set "brand.eyebrow=NORTHWIND TRADING CO." \
   --set "brand.tagline=Ship it, measure it" --set "brand.contact=northwind.example · ops@northwind.example" \
   --set brand.accent=#1E3A8A --set theme=system --set store.kind=sqlite --set timezone=America/New_York \
-  --set detect.all_profiles=y --set detect.wsl=y --set anonymize.on_every_run=y \
+  --set detect.all_profiles=y --set detect.wsl=y --set anonymize.on_every_run=y --set archive.raw_logs=y \
   --set schedule.frequency=daily --set schedule.time=03:00 --set schedule.install=n
 python3 scripts/ledger.py run
 ```

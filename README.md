@@ -4,7 +4,7 @@
   <img src="assets/logo.png" alt="CompleteTech LLC logo" width="260">
 </p>
 
-A CompleteTech LLC skill for compiling every locally recorded AI coding-agent call into one priced, account-attributed, validated ledger, kept append-only in SQLite, JSON or CSV, and rendered as a branded light/dark dashboard, a research-grade study package and fifteen ledger documents (statements, memos, briefs, billing evidence) in Markdown, HTML, PDF and DOCX. Onboard once; refresh by hand or on a schedule; anonymise for publication.
+A CompleteTech LLC skill for compiling every locally recorded AI coding-agent call into one priced, account-attributed, validated ledger, kept append-only in SQLite, JSON or CSV, and rendered as a branded light/dark dashboard, a research-grade study package and fifteen ledger documents (statements, memos, briefs, billing evidence) in Markdown, HTML, PDF and DOCX. Onboard once; refresh by hand or on a schedule; keep the raw logs if you want them; anonymise for publication; ask it anything specific afterwards.
 
 ## About
 
@@ -13,7 +13,7 @@ Part of the CompleteTech LLC agentic services skill library. Where the `agentic-
 ## OpenClaw / ClawHub Metadata
 
 - Skill key: `ai-usage-ledger`
-- Version-ready metadata: `1.4.0`
+- Version-ready metadata: `1.5.0`
 - Homepage: https://github.com/CompleteTech-LLC/ai-usage-ledger-skill
 - README: https://github.com/CompleteTech-LLC/ai-usage-ledger-skill#readme
 - Runtime binaries: `python3`
@@ -58,6 +58,8 @@ flowchart LR
 - Refreshes on a schedule when asked: onboarding offers daily / weekly / monthly and installs a Task Scheduler task or a crontab line that logs to the ledger home.
 - Renders fifteen ledger documents from a catalog with a machine-readable index: executive summary, monthly statement, quarterly review, account statement, subscription memo, renewal recommendation, cache brief, budget forecast, project allocation, billing evidence, model mix, tool adoption, host inventory, data-quality note and correction notice, as Markdown, themed HTML, PDF and DOCX.
 - Anonymises for publication: salted pseudonyms for hosts, sessions, projects and accounts; paths, prompts and identities removed; a private map kept for the owner.
+- Archives the raw log files themselves when asked at onboarding: every file the scanners read, from any tool on any host kind (local, other drive, WSL, SSH), gzip by default, indexed, append-only, with `grep` and `restore`; the transcripts outlive the tools' retention windows.
+- Answers detailed questions from the accumulated store: thirty presets (per day, week, month, tool, host, model, project, account, plan, session, prompt text, cache, first and last use), free read-only SQL, and regex search inside the archived logs, with date, tool, host, account, model and project filters and table / CSV / JSON output.
 - Finds agent logs on every drive, user profile, WSL distro and SSH host, including old-profile backups.
 - Parses Claude Code / Agent SDK, Codex CLI / Desktop / VS Code, GitHub Copilot CLI, Gemini CLI, Qwen Code, opencode, OpenClaw, pi, Cline / Roo Code / Kilo Code, aider, Kimi Code CLI, Mistral Vibe and Continue with dedicated parsers, and any other JSON-logging tool through a generic usage sniffer.
 - De-duplicates streamed turns and Codex fork replay (the copy of a parent's history that every spawned thread carries), which otherwise inflates totals by an order of magnitude.
@@ -75,6 +77,8 @@ flowchart LR
 - `scripts/render_ledger_doc.py`, `scripts/render_pdf.py` - the document template system: catalog listing, placeholder filling from the ledger, Markdown / HTML / PDF / DOCX output.
 - `scripts/anonymize.py` - pseudonymise a ledger for publication.
 - `scripts/schedule.py` - Task Scheduler / cron entry for the scheduled refresh.
+- `scripts/ledger_archive.py` - raw-log archive (status, list, grep, restore).
+- `scripts/ledger_query.py` - the question layer over the store and the archive.
 - `scripts/compile_ai_logs.py` - `scan` (14 parsers plus a generic sniffer) and `report` (merge, price, attribute).
 - `scripts/analyze_events.py` - distributions, time of day, concentration, validation, sensitivity.
 - `scripts/build_dashboard.py`, `scripts/build_report.py` - branded dashboard and study renderers.
@@ -96,6 +100,8 @@ python3 scripts/ledger.py status
 python3 scripts/ledger.py doc --list       # ledger documents; render one with --template <id> [--pdf --docx]
 python3 scripts/ledger.py run --anonymize  # publishable copy under <workdir>/anonymized/
 python3 scripts/ledger.py schedule status  # the scheduled refresh chosen at onboarding
+python3 scripts/ledger.py query --presets  # then e.g. query by-project --since 2026-08-01 --tool codex
+python3 scripts/ledger.py archive status   # the raw-log archive, if enabled at onboarding
 ```
 
 From an agent or CI, skip the prompts: `python3 scripts/ledger.py init --yes --set brand.name=Acme --set store.kind=json`. Preferences live in `~/.ai-usage-ledger/config.json` (override with `AI_USAGE_LEDGER_HOME`); review the generated `accounts.json` there before trusting the per-account tables. `python3 scripts/ledger.py reinit` starts over and keeps the previous store beside the new one.
@@ -151,7 +157,7 @@ Use a direct, concrete, low-hype tone. Present figures as measured evidence with
 | Capability | Boundary |
 |---|---|
 | Files read | Agent transcripts, tool databases and credential files under the operator's own profiles and manifest hosts; bundled templates, references, `assets/logo.png`. |
-| Files written | `~/.ai-usage-ledger/` (config, store, generated manifest, accounts, pricing, report config, private anonymisation map, scheduler wrapper and logs); `scans/`, `compiled/`, `store-export/`, `reports/`, `anonymized/`, `documents/` under the chosen `workdir`; test fixtures during the test suites. |
+| Files written | `~/.ai-usage-ledger/` (config, store, generated manifest, accounts, pricing, report config, private anonymisation map, scheduler wrapper and logs, and the raw-log archive when enabled); `scans/`, `compiled/`, `store-export/`, `reports/`, `anonymized/`, `documents/` under the chosen `workdir`; test fixtures during the test suites. |
 | Local commands | `python3` scripts; `wsl.exe -l -q` during detection; `wsl.exe`, `ssh`, `scp` only for hosts in the manifest; `schtasks` / `crontab` only for `schedule install|remove`. |
 | Not required | Outbound network access, credential use, persistence, privilege escalation, destructive file operations, background services. |
 
