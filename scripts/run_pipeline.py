@@ -94,10 +94,16 @@ def scan_host(host, scans_dir, python="python"):
         cmd = " ".join([shlex.quote(wsl_python), shlex.quote(wsl_scanner)] + [shlex.quote(x) for x in scan_args(host)] + ["--out-dir", shlex.quote(wsl_out)])
         # the WSL service intermittently refuses calls under load (Wsl/Service/0x8007274c); retry before falling back,
         # because a scan over the \wsl$ share can silently miss files (9P errors) and is four times slower
+        # a previous run's outputs must not be mistaken for this run's: remove them before the first attempt, so
+        # "the inventory file exists" means the scanner just wrote it
+        inv_path = os.path.join(out_dir, "inventory.%s.json" % name)
+        for fn in os.listdir(out_dir):
+            if fn.startswith(("inventory.", "events.", "sessions.", "prompts.")) and (fn.endswith(".json") or fn.endswith(".jsonl")):
+                os.remove(os.path.join(out_dir, fn))
         done = False
         for attempt in range(1, int(host.get("wsl_attempts", 3)) + 1):
             r = run(["wsl.exe", "-d", distro, "--", "bash", "-lc", cmd], check=False)
-            done = r.returncode == 0 and os.path.isfile(os.path.join(out_dir, "inventory.%s.json" % name))
+            done = r.returncode == 0 and os.path.isfile(inv_path)
             if done:
                 break
             log("WSL scan attempt %d for %s failed (rc=%s)%s" % (attempt, name, r.returncode, "; retrying in 30 s" if attempt < int(host.get("wsl_attempts", 3)) else ""))
