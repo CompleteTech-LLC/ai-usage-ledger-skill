@@ -24,6 +24,9 @@ import sys
 import time
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import safety  # noqa: E402
+
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
 EVENT_COLUMNS = ["id", "seq", "tool", "host", "ts", "date", "session", "model", "input_uncached", "cache_read", "cache_write",
@@ -148,9 +151,11 @@ class SqliteStore(Store):
 
     def __init__(self, path):
         self.path = path
-        os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+        safety.private_dir(os.path.dirname(os.path.abspath(path)) or ".")
         self.db = sqlite3.connect(path)
         self.db.execute("PRAGMA journal_mode=WAL")
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            safety.private_file(path + suffix)
         c = self.db
         # columns are declared without a type so integers and floats keep their type (SQLite dynamic typing)
         c.execute("CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, %s, extra TEXT)" % ", ".join(EVENT_COLUMNS[1:]))
@@ -258,7 +263,7 @@ class FileStore(Store):
     def __init__(self, path, fmt):
         self.kind = fmt
         self.path = path
-        os.makedirs(path, exist_ok=True)
+        safety.private_dir(path)
         self.ext = "jsonl" if fmt == "json" else "csv"
         self.ids = {t: self._load_ids(t) for t in ("events", "sessions", "prompts")}
 
@@ -305,6 +310,8 @@ class FileStore(Store):
         with open(self._idx(table), "a", encoding="utf-8") as fh:
             for r in uniq:
                 fh.write(r["id"] + "\n")
+        safety.private_file(path)
+        safety.private_file(self._idx(table))
         self.ids[table].update(r["id"] for r in uniq)
         return len(uniq), len(rows) - len(uniq)
 
@@ -329,6 +336,7 @@ class FileStore(Store):
     def _put_run(self, meta):
         with open(os.path.join(self.path, "runs.jsonl"), "a", encoding="utf-8") as fh:
             fh.write(json.dumps(meta) + "\n")
+        safety.private_file(os.path.join(self.path, "runs.jsonl"))
 
     def _prefs_path(self):
         return os.path.join(self.path, "prefs.json")
@@ -343,8 +351,7 @@ class FileStore(Store):
     def set_pref(self, key, value):
         prefs = self.all_prefs()
         prefs[key] = value
-        with open(self._prefs_path(), "w", encoding="utf-8") as fh:
-            json.dump(prefs, fh, indent=2)
+        safety.write_private(self._prefs_path(), json.dumps(prefs, indent=2))
 
     def get_pref(self, key, default=None):
         return self.all_prefs().get(key, default)

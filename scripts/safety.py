@@ -12,6 +12,12 @@ than become a command or markup. This module is the single place that enforces i
   warn_if_writable(path)           POSIX: warn when a config file is group- or world-writable
   sanitize_branding(b, base_dir)   escaped text, validated colours/tokens/fonts, local-only logo, opt-in extra CSS
   CSP_META                         a restrictive Content-Security-Policy for every generated HTML page
+  private_dir(path) / write_private(path, text) / private_file(path)
+                                   0700 directories and 0600 files for everything the ledger keeps about its owner
+  refuse_if_shared(path)           stop when a config file others can edit would be executed as configuration
+  check_source_path(p)             grammar for a log file path that goes into an archive (local or remote)
+  safe_relative(rel) / contained(root, dest) / check_host_name(name)
+                                   archive layout: no '..', no absolute, realpath containment, plain host names
 
 Standard library only.
 """
@@ -22,6 +28,9 @@ import stat
 import sys
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+HOST_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+IS_POSIX = os.name != "nt"
+ALLOW_SHARED_ENV = "AI_USAGE_LEDGER_ALLOW_SHARED"
 SSH_TARGET_RE = re.compile(r"^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9][A-Za-z0-9._-]*$")
 REMOTE_PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
 INTERPRETER_RE = re.compile(r"^(?:python3?(?:\.\d+)?|/[A-Za-z0-9._/-]+/python3?(?:\.\d+)?)$")
@@ -90,6 +99,91 @@ def warn_if_writable(path, log=None):
         (log or (lambda m: sys.stderr.write(m + "\n")))(msg)
         return True
     return False
+
+
+def private_dir(path):
+    """Create (or fix) a directory that only its owner may read: 0700 on POSIX; NTFS inherits the profile ACL on Windows."""
+    os.makedirs(path, exist_ok=True)
+    if IS_POSIX:
+        try:
+            if os.stat(path).st_mode & 0o077:
+                os.chmod(path, 0o700)
+        except OSError:
+            pass
+    return path
+
+
+def private_file(path):
+    """0600 on POSIX for a file that already exists (SQLite databases, appended logs); no-op on Windows."""
+    if IS_POSIX and path and os.path.exists(path):
+        try:
+            if os.stat(path).st_mode & 0o077:
+                os.chmod(path, 0o600)
+        except OSError:
+            pass
+    return path
+
+
+def write_private(path, text, encoding="utf-8"):
+    """Write a sensitive text file atomically with mode 0600 (owner read/write only)."""
+    private_dir(os.path.dirname(os.path.abspath(path)) or ".")
+    tmp = path + ".tmp-%d" % os.getpid()
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding=encoding, newline="\n") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+    private_file(path)
+    return path
+
+
+def refuse_if_shared(path, what="configuration"):
+    """A config file that others can edit decides which hosts we reach and what we run: refuse unless overridden."""
+    if not IS_POSIX or not path or not os.path.exists(path):
+        return
+    try:
+        st = os.stat(path)
+    except OSError:
+        return
+    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH) and not os.environ.get(ALLOW_SHARED_ENV):
+        raise UnsafeValue("%s %s is group- or world-writable; fix it with chmod 600 (or set %s=1 to override)" % (what, path, ALLOW_SHARED_ENV))
+    if hasattr(os, "geteuid") and st.st_uid not in (os.geteuid(), 0) and not os.environ.get(ALLOW_SHARED_ENV):
+        raise UnsafeValue("%s %s is owned by another user (set %s=1 to override)" % (what, path, ALLOW_SHARED_ENV))
+
+
+def check_host_name(name):
+    if not HOST_NAME_RE.match(str(name or "")):
+        raise UnsafeValue("host name must be plain [A-Za-z0-9._-]: %r" % str(name)[:60])
+    return str(name)
+
+
+def check_source_path(p, what="source path"):
+    """A log file path that will be archived: absolute (POSIX, drive or UNC), no control characters, no option-looking start."""
+    s = check_path(p, what)
+    n = s.replace("\\", "/")
+    if not (n.startswith("/") or re.match(r"^[A-Za-z]:/", n)):
+        raise UnsafeValue("%s must be absolute: %r" % (what, s[:80]))
+    if any(part == ".." for part in n.split("/")):
+        raise UnsafeValue("%s must not contain '..': %r" % (what, s[:80]))
+    return s
+
+
+def safe_relative(rel):
+    """An archive-relative path: no absolute prefix, no '..' component, no empty result."""
+    r = str(rel).replace("\\", "/").strip("/")
+    parts = [x for x in r.split("/") if x not in ("", ".")]
+    if not parts or any(x == ".." for x in parts) or re.match(r"^[A-Za-z]:", parts[0]) and len(parts[0]) == 2 and False:
+        raise UnsafeValue("unsafe relative path: %r" % str(rel)[:80])
+    return "/".join(parts)
+
+
+def contained(root, dest):
+    """True when dest (after symlink resolution of its parent) stays inside root."""
+    root_r = os.path.realpath(root)
+    parent_r = os.path.realpath(os.path.dirname(dest))
+    try:
+        return os.path.commonpath([root_r, parent_r]) == root_r
+    except ValueError:
+        return False
 
 
 def _text(v):

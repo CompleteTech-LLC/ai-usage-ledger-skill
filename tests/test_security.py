@@ -11,6 +11,11 @@ Covers the ClawHub audit findings for 1.5.0:
   3. scheduled wrapper: no free-form arguments, every word quoted, mode 0700 on POSIX (schedule.py)
   4. branding with markup, bad colours, remote logo, extra CSS -> escaped / dropped (build_dashboard.py, build_report.py)
   5. generated dashboard, study and documents carry a CSP and no http(s) resource references
+Covers the audit findings for 1.5.1:
+  6. unattended onboarding stays neutral (no publisher identity); `run` without a config refuses; presets are explicit
+  7. archive: '..' and absolute paths, hostile host names and escapes outside the root are refused; ssh archive
+     validates the target and drops hostile paths before any ssh call; remote commands are fixed strings
+  8. private files: ledger home 0700, config / store / index / map 0600 under a permissive umask (POSIX)
 """
 import json
 import os
@@ -164,6 +169,132 @@ def check_branding_and_pages(compiled):
     return good
 
 
+def check_neutral_branding():
+    import tempfile
+    home = tempfile.mkdtemp(prefix="ledger-neutral-")
+    env = dict(os.environ, AI_USAGE_LEDGER_HOME=home)
+    ledger = os.path.join(SCRIPTS, "ledger.py")
+    r0 = run([PY, ledger, "run", "--no-detect"], env=env)  # no config yet: must refuse, not onboard-and-scan
+    refused = r0.returncode != 0 and "init" in (r0.stderr + r0.stdout) and not os.path.exists(os.path.join(home, "config.json"))
+    r1 = run([PY, ledger, "init", "--yes", "--set", "detect.wsl=n", "--set", "detect.all_profiles=n"], env=env)
+    cfg = json.load(open(os.path.join(home, "config.json"), encoding="utf-8"))
+    rc = json.load(open(cfg["report_config_path"], encoding="utf-8"))
+    blob = json.dumps(cfg["branding"]) + json.dumps(rc["branding"])
+    neutral = r1.returncode == 0 and not cfg["branding"].get("explicit") and all(s not in blob for s in ("CompleteTech", "complete.tech", "@", "Innovation")) and "Unbranded" in json.dumps(rc["branding"])
+    r2 = run([PY, ledger, "init", "--yes", "--brand-preset", "completetech"], env=env)
+    cfg2 = json.load(open(os.path.join(home, "config.json"), encoding="utf-8"))
+    preset = r2.returncode == 0 and cfg2["branding"].get("name") == "CompleteTech" and cfg2["branding"].get("explicit") is True and cfg2["branding"].get("preset") == "completetech"
+    r3 = run([PY, ledger, "init", "--yes", "--set", "brand.preset=none", "--set", "brand.name=Acme"], env=env)
+    cfg3 = json.load(open(os.path.join(home, "config.json"), encoding="utf-8"))
+    explicit = r3.returncode == 0 and cfg3["branding"].get("name") == "Acme" and cfg3["branding"].get("explicit") is True and "CompleteTech" not in json.dumps(cfg3["branding"])
+    bad_preset = run([PY, ledger, "init", "--yes", "--brand-preset", "nosuch"], env=env).returncode != 0
+    good = refused and neutral and preset and explicit and bad_preset
+    print("branding-default: run-without-config refused %s, unattended init neutral %s, explicit preset %s, explicit --set %s, unknown preset refused %s  %s" % (refused, neutral, preset, explicit, bad_preset, "OK" if good else "FAIL"))
+    if not good:
+        print(r0.stderr[-300:], r1.stderr[-300:], r2.stderr[-300:], blob[:300])
+    shutil.rmtree(home, ignore_errors=True)
+    return good
+
+
+def check_archive_boundaries():
+    import ledger_archive
+    refused = 0
+    for p in ("/a/../../etc/passwd", "../x", "C:/Users/x/../../../Windows/evil"):
+        try:
+            ledger_archive.rel_path(p)
+        except SystemExit:
+            refused += 1
+    ok_rel = ledger_archive.rel_path("C:\\Users\\x\\.codex\\s.jsonl") == "C/Users/x/.codex/s.jsonl" and ledger_archive.rel_path("//wsl$/Ubuntu/home/u/.claude/a.jsonl") == "home/u/.claude/a.jsonl"
+    arch = ledger_archive.Archive(os.path.join(OUT, "arch"))
+    bad_host = 0
+    for h in ("../evil", "h/../..", "a b", "-x", ""):
+        try:
+            arch.dest_for(h, "/a/b")
+        except SystemExit:
+            bad_host += 1
+    src_refused = 0
+    for p in ("/a\nb", "relative/path", "-rf", "/x/../../etc", "/a\x00b"):
+        try:
+            safety.check_source_path(p)
+        except SystemExit:
+            src_refused += 1
+    dest, _ = arch._checked_dest("host-1", "/home/u/.codex/x.jsonl")
+    inside = safety.contained(arch.path, dest)
+    # ssh archive: the target is validated and hostile paths dropped before any ssh process starts
+    import subprocess as sp
+    calls = []
+    real_run, real_popen = sp.run, sp.Popen
+
+    def spy(*a, **k):
+        calls.append(a[0])
+        raise RuntimeError("ssh must not be called")
+    sp.run, sp.Popen = spy, spy
+    try:
+        try:
+            arch.archive_ssh("h", {"ssh": "-oProxyCommand=evil host"}, ["/srv/x.jsonl"])
+            target_refused = False
+        except SystemExit:
+            target_refused = True
+        res = arch.archive_ssh("h", {"ssh": "user@host"}, ["/srv/a\nb.jsonl", "relative.jsonl", "/srv/../etc/passwd"])
+        hostile_dropped = res == (0, 0, 0) and not calls
+    finally:
+        sp.run, sp.Popen = real_run, real_popen
+    fixed_cmds = "xargs -0" in ledger_archive.Archive.REMOTE_STAT and "--null" in ledger_archive.Archive.REMOTE_TAR
+    arch.close()
+    good = refused == 3 and ok_rel and bad_host == 5 and src_refused == 5 and inside and target_refused and hostile_dropped and fixed_cmds
+    print("archive:   traversal refused %d/3, host names refused %d/5, source paths refused %d/5, destination contained %s, ssh target refused %s, hostile paths dropped before ssh %s, fixed remote commands %s  %s" % (
+        refused, bad_host, src_refused, inside, target_refused, hostile_dropped, fixed_cmds, "OK" if good else "FAIL"))
+    return good
+
+
+def check_private_permissions():
+    if os.name == "nt":
+        print("perms:     skipped on Windows (NTFS profile ACLs; POSIX modes are checked in CI)  OK")
+        return True
+    import tempfile
+    import anonymize
+    import ledger_store
+    import ledger_archive
+    old = os.umask(0o022)
+    try:
+        home = tempfile.mkdtemp(prefix="ledger-perm-")
+        os.chmod(home, 0o755)
+        env = dict(os.environ, AI_USAGE_LEDGER_HOME=home)
+        run([PY, os.path.join(SCRIPTS, "ledger.py"), "init", "--yes", "--set", "detect.wsl=n", "--set", "detect.all_profiles=n"], env=env)
+        modes = {"home": os.stat(home).st_mode & 0o777, "config": os.stat(os.path.join(home, "config.json")).st_mode & 0o777,
+                 "accounts": os.stat(os.path.join(home, "accounts.json")).st_mode & 0o777, "manifest": os.stat(os.path.join(home, "manifest.json")).st_mode & 0o777}
+        st = ledger_store.Store.open("sqlite", os.path.join(home, "s.sqlite"))
+        st.set_pref("k", 1)
+        st.close()
+        modes["sqlite"] = os.stat(os.path.join(home, "s.sqlite")).st_mode & 0o777
+        fs = ledger_store.Store.open("json", os.path.join(home, "j"))
+        fs.set_pref("k", 1)
+        fs.close()
+        modes["json-dir"] = os.stat(os.path.join(home, "j")).st_mode & 0o777
+        modes["prefs"] = os.stat(os.path.join(home, "j", "prefs.json")).st_mode & 0o777
+        ar = ledger_archive.Archive(os.path.join(home, "archive"))
+        ar.close()
+        modes["archive-dir"] = os.stat(os.path.join(home, "archive")).st_mode & 0o777
+        modes["index"] = os.stat(os.path.join(home, "archive", "index.sqlite")).st_mode & 0o777
+        an = anonymize.Anonymizer("salt", os.path.join(home, "map.json"))
+        an.host("x")
+        an.save_map()
+        modes["map"] = os.stat(os.path.join(home, "map.json")).st_mode & 0o777
+        # a config someone else could edit is refused
+        os.chmod(os.path.join(home, "config.json"), 0o666)
+        r = run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
+        shared_refused = r.returncode != 0 and "writable" in (r.stderr + r.stdout)
+        os.chmod(os.path.join(home, "config.json"), 0o600)
+        want = {"home": 0o700, "config": 0o600, "accounts": 0o600, "manifest": 0o600, "sqlite": 0o600, "json-dir": 0o700, "prefs": 0o600, "archive-dir": 0o700, "index": 0o600, "map": 0o600}
+        bad = {k: oct(v) for k, v in modes.items() if v != want[k]}
+        good = not bad and shared_refused
+        print("perms:     %s under umask 022; shared config refused %s  %s" % ("all private" if not bad else "wrong: %s" % bad, shared_refused, "OK" if good else "FAIL"))
+        shutil.rmtree(home, ignore_errors=True)
+        return good
+    finally:
+        os.umask(old)
+
+
 def check_examples_self_contained():
     bad = []
     for fn in ("example.html", "example-study.html"):
@@ -192,6 +323,9 @@ def main():
     ok = check_wrapper() and ok
     ok = check_branding_and_pages(compiled) and ok
     ok = check_examples_self_contained() and ok
+    ok = check_neutral_branding() and ok
+    ok = check_archive_boundaries() and ok
+    ok = check_private_permissions() and ok
     print("SECURITY OK" if ok else "SECURITY CHECKS FAILED")
     return 0 if ok else 1
 

@@ -80,7 +80,7 @@ def check_cli(scan_dir):
     env = dict(os.environ, AI_USAGE_LEDGER_HOME=home)
     py = sys.executable
     ledger = os.path.join(SCRIPTS, "ledger.py")
-    run([py, ledger, "init", "--yes", "--set", "store.kind=json", "--set", "brand.name=Fixture Co", "--set", "detect.wsl=n", "--set", "workdir=" + os.path.join(OUT, "cli-work"),
+    run([py, ledger, "init", "--yes", "--set", "store.kind=json", "--set", "brand.name=Fixture Co", "--set", "detect.wsl=n", "--set", "detect.all_profiles=n", "--set", "workdir=" + os.path.join(OUT, "cli-work"),
          "--set", "archive.raw_logs=y", "--set", "archive.path=" + os.path.join(OUT, "archive")], env=env)
     cfg = json.load(open(os.path.join(home, "config.json"), encoding="utf-8"))
     ok = cfg["store"]["kind"] == "json" and cfg["branding"]["name"] == "Fixture Co" and os.path.isfile(cfg["manifest_path"]) and os.path.isfile(cfg["accounts_path"]) and os.path.isfile(cfg["pricing_path"])

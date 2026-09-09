@@ -15,7 +15,8 @@ The ClawHub bundle is intended to include text-based skill material only:
 - `templates/` JSON manifests, pricing sheet, account and report-config examples
 - `examples/` text inputs and README placeholders
 - `assets/diagrams/*.mmd`
-- `assets/examples/example.md` (the rendered study in Markdown)
+
+The rendered demonstration artefacts under `assets/examples/` (branded with the CompleteTech preset) stay on GitHub and are excluded from the registry bundle, so the published skill carries no publisher identity in its outputs.
 
 ## Excluded From ClawHub
 
@@ -42,6 +43,8 @@ The skill reads agent transcripts and credential files on the user's own machine
 ## Security Audit Response
 
 ClawHub's audit of 1.5.0 reported shell command injection through the report output directory (`os.system` sort), through unquoted SSH manifest fields, and through the scheduler's free-form extra arguments, plus unescaped branding in generated HTML and external Google Fonts requests. 1.5.1 replaces the shell sort with a Python merge sort, validates and quotes every remote command word, removes free-form scheduler arguments, escapes and validates branding, inlines all resources with a Content-Security-Policy, warns on group- or world-writable configuration, and adds `tests/test_security.py` to the quality gate.
+
+The audit of 1.5.1 asked for neutral default branding, containment and remote-command hardening in the raw-log archive, and owner-only permissions for the ledger's private files. 1.5.2 makes the default brand neutral with presets applied only on explicit request (and `run` refusing to start unconfigured), validates archive host names, source paths and destinations with realpath containment, replaces the remote heredoc scripts with fixed commands reading NUL-delimited lists, creates the ledger home and its files 0700 / 0600, refuses group- or world-writable configs, keeps `accounts.json` out of study packages unless requested, and excludes the branded example artefacts from the registry bundle.
 
 ## Local Readiness Check
 

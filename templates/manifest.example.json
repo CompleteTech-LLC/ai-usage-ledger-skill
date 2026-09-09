@@ -7,6 +7,7 @@
   "pricing": "pricing.json",
   "accounts": "accounts.json",
   "report_config": "report_config.json",
+  "package_accounts": false,
   "study_url": "",
   "hosts": [
     {

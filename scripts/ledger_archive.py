@@ -18,7 +18,12 @@ tools (their logs are append-only), so the latest copy is a superset. Nothing is
     python3 ledger_archive.py --archive ... grep "pattern" [--host h] [--since 2026-08-01] [--limit 50]
     python3 ledger_archive.py --archive ... restore --host h --to /tmp/restored [--match sessions/2026/08]
 
-Standard library only. Remote (ssh) hosts are pulled with `ssh <host> tar czf - -T -`.
+Boundaries: host names are plain identifiers, every source path is validated (absolute, no control characters,
+no '..'), every destination is checked to stay inside the archive root after symlink resolution, and remote
+hosts are reached with fixed commands that read NUL-delimited file lists on stdin (no remote shell script is
+ever composed from paths). The archive directory and index are owner-only.
+
+Standard library only.
 """
 import argparse
 import glob
@@ -35,6 +40,9 @@ import sys
 import tarfile
 import time
 from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import safety  # noqa: E402
 
 COUNTER_FILES = ("stats-cache.json", "state_5.sqlite", "history.jsonl", "session-store.db", "auth.json.NEVER")  # auth files are never archived
 
@@ -54,8 +62,8 @@ def rel_path(path):
         return "unc-%s/%s" % (m.group(1), m.group(2))
     m = re.match(r"^([A-Za-z]):/(.*)$", p)
     if m:
-        return "%s/%s" % (m.group(1).upper(), m.group(2))
-    return p.lstrip("/")
+        p = "%s/%s" % (m.group(1).upper(), m.group(2))
+    return safety.safe_relative(p)  # refuses '..' components and empty results
 
 
 def collect_sources(scans_dir, host_name):
@@ -72,7 +80,10 @@ def collect_sources(scans_dir, host_name):
                         continue
                     s = row.get("src") or row.get("file")
                     if s:
-                        srcs.add(s)
+                        try:
+                            srcs.add(safety.check_source_path(s))
+                        except SystemExit as ex:  # scan output is data, not trusted: skip anything that is not a plain absolute path
+                            sys.stderr.write("archive: skipped %s\n" % ex)
     roots = set()
     for p in glob.glob(os.path.join(d, "inventory.*.json")):
         try:
@@ -89,8 +100,9 @@ class Archive:
     def __init__(self, path, compress=True):
         self.path = path
         self.compress = compress
-        os.makedirs(path, exist_ok=True)
+        safety.private_dir(path)
         self.db = sqlite3.connect(os.path.join(path, "index.sqlite"))
+        safety.private_file(os.path.join(path, "index.sqlite"))
         self.db.execute("CREATE TABLE IF NOT EXISTS files (host TEXT, path TEXT, rel TEXT, size INTEGER, mtime REAL, sha256 TEXT, archived_at TEXT, versions INTEGER DEFAULT 1, PRIMARY KEY (host, path))")
         self.db.execute("CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT, started_at TEXT, finished_at TEXT, files_new INTEGER, files_updated INTEGER, bytes INTEGER, note TEXT)")
         self.db.commit()
@@ -100,20 +112,31 @@ class Archive:
         return {row[0]: (row[1], row[2]) for row in self.db.execute("SELECT path, size, mtime FROM files WHERE host=?", (host,))}
 
     def dest_for(self, host, path):
+        safety.check_host_name(host)
         rel = rel_path(path)
-        return os.path.join(self.path, host, rel + (".gz" if self.compress else "")), rel
+        dest = os.path.join(self.path, host, rel + (".gz" if self.compress else ""))
+        return dest, rel
+
+    def _checked_dest(self, host, path):
+        """Destination inside the archive root, verified after creating (and resolving) its parent directory."""
+        dest, rel = self.dest_for(host, path)
+        safety.private_dir(os.path.dirname(dest))
+        if not safety.contained(self.path, dest):
+            raise safety.UnsafeValue("archive destination escapes the archive root: %r" % path[:80])
+        return dest, rel
 
     def _write(self, host, path, data, size, mtime, sha, existed):
-        dest, rel = self.dest_for(host, path)
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        dest, rel = self._checked_dest(host, path)
         tmp = dest + ".part"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         if self.compress:
-            with gzip.open(tmp, "wb", compresslevel=6) as fh:
+            with gzip.GzipFile(fileobj=os.fdopen(fd, "wb"), mode="wb", compresslevel=6) as fh:
                 fh.write(data)
         else:
-            with open(tmp, "wb") as fh:
+            with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
         os.replace(tmp, dest)
+        safety.private_file(dest)
         if existed:
             self.db.execute("UPDATE files SET size=?, mtime=?, sha256=?, archived_at=?, versions=versions+1, rel=? WHERE host=? AND path=?", (size, mtime, sha, now(), rel, host, path))
         else:
@@ -122,10 +145,16 @@ class Archive:
     # ---- local / share / wsl-share -------------------------------------------
     def archive_local(self, host, paths, prefix="", log=print):
         """paths are native paths on that host; prefix (e.g. //wsl$/Ubuntu) makes them readable here."""
+        safety.check_host_name(host)
         known = self._known(host)
         new = upd = nbytes = 0
         started = now()
         for p in sorted(paths):
+            try:
+                p = safety.check_source_path(p)
+            except SystemExit as ex:
+                log("  skip: %s" % ex)
+                continue
             local = (prefix.rstrip("/\\") + p) if prefix and not p.startswith(prefix) else p
             if os.path.basename(p).lower() in ("auth.json", ".credentials.json", "credentials.json"):
                 continue
@@ -159,19 +188,36 @@ class Archive:
         return new, upd, nbytes
 
     # ---- ssh ------------------------------------------------------------------
-    def archive_ssh(self, host, ssh, paths, log=print):
-        """Pull the listed files in one tar stream; the remote side needs tar and ssh access only."""
+    # fixed remote commands: paths never enter the command line; they arrive NUL-delimited on stdin
+    REMOTE_STAT = "xargs -0 -r stat -c '%s %Y %n' -- 2>/dev/null"  # constant; missing files are simply absent from the output
+    REMOTE_TAR = "tar czf - --null -T -"
+
+    def archive_ssh(self, host, ssh_cfg, paths, log=print):
+        """Pull the listed files in one tar stream; the remote side needs tar, xargs, stat and ssh access only.
+
+        ssh_cfg is the manifest host entry (validated by safety.validate_ssh_host) or a plain target string."""
+        safety.check_host_name(host)
+        cfg = ssh_cfg if isinstance(ssh_cfg, dict) else {"ssh": ssh_cfg}
+        target, _, _ = safety.validate_ssh_host(cfg)
         known = self._known(host)
-        wanted = sorted(p for p in paths if os.path.basename(p).lower() not in ("auth.json", ".credentials.json"))
+        wanted = []
+        for p in sorted(paths):
+            if os.path.basename(p).lower() in ("auth.json", ".credentials.json"):
+                continue
+            try:
+                p = safety.check_source_path(p, "remote source path")
+            except SystemExit as ex:
+                log("  skip: %s" % ex)
+                continue
+            if not safety.REMOTE_PATH_RE.match(p) and not re.match(r"^/[^\x00-\x1f\x7f]+$", p):
+                log("  skip: not a plain absolute path: %r" % p[:80])
+                continue
+            wanted.append(p)
         if not wanted:
             return 0, 0, 0
-        # ask for size+mtime first so unchanged files are not transferred. The remote command is a small shell
-        # script fed on stdin (no quoting through Windows argv); the file list travels inside a quoted heredoc.
-        listing = "\n".join(wanted)
-        stat_script = "while IFS= read -r f; do [ -f \"$f\" ] && stat -c '%s %Y %n' -- \"$f\" 2>/dev/null; done <<'AI_USAGE_LEDGER_EOF'\n" + listing + "\nAI_USAGE_LEDGER_EOF\nexit 0\n"
-        # bytes, not text mode: on Windows text mode would turn the newlines into CRLF and break every path
-        r = subprocess.run(["ssh", "-o", "BatchMode=yes", ssh, "sh"], input=stat_script.encode("utf-8"), capture_output=True)
-        if r.returncode != 0:
+        # size+mtime first so unchanged files are not transferred (bytes mode: no CRLF translation on Windows)
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", "--", target, self.REMOTE_STAT], input=("\0".join(wanted) + "\0").encode("utf-8"), capture_output=True)
+        if r.returncode not in (0, 123):  # 123: xargs ran but some files did not exist, which is expected for optional counters
             log("  ssh stat failed for %s: %s" % (host, r.stderr.decode("utf-8", "replace")[-300:]))
         remote = {}
         for line in r.stdout.decode("utf-8", "replace").splitlines():
@@ -182,9 +228,8 @@ class Archive:
         if not todo:
             return 0, 0, 0
         started = now()
-        tar_script = "tar czf - -T - <<'AI_USAGE_LEDGER_EOF'\n" + "\n".join(todo) + "\nAI_USAGE_LEDGER_EOF\n"
-        proc = subprocess.Popen(["ssh", "-o", "BatchMode=yes", ssh, "sh"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out, err = proc.communicate(input=tar_script.encode("utf-8"))
+        proc = subprocess.Popen(["ssh", "-o", "BatchMode=yes", "--", target, self.REMOTE_TAR], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = proc.communicate(input=("\0".join(todo) + "\0").encode("utf-8"))
         if proc.returncode not in (0, 1):  # 1 = some files changed while reading; acceptable for append-only logs
             log("  ssh tar failed for %s: %s" % (host, err.decode("utf-8", "replace")[-300:]))
             return 0, 0, 0
@@ -194,6 +239,8 @@ class Archive:
                 if not m.isfile():
                     continue
                 p = "/" + m.name.lstrip("./") if not m.name.startswith("/") else m.name
+                if p not in remote:  # only files we asked for, by their exact path
+                    continue
                 data = tf.extractfile(m).read()
                 sha = hashlib.sha256(data).hexdigest()
                 prev = known.get(p)
@@ -265,12 +312,27 @@ class Archive:
                 yield {"host": f["host"], "path": f["path"], "line": 0, "ts": "", "snippet": "unreadable: %s" % ex}
 
     def restore(self, host, to, match=None):
+        """Decompress a host's files under `to`; index rows are re-validated and every destination is kept inside `to`."""
+        safety.check_host_name(host)
+        safety.private_dir(to)
         n = 0
         for f in self.list(host, match):
-            dest = os.path.join(to, host, f["path"] and rel_path(f["path"]))
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            try:
+                rel = rel_path(safety.check_source_path(f["path"]))
+            except SystemExit as ex:
+                sys.stderr.write("restore: skipped %s\n" % ex)
+                continue
+            dest = os.path.join(to, host, rel)
+            safety.private_dir(os.path.dirname(dest))
+            if not safety.contained(to, dest):
+                sys.stderr.write("restore: refused destination outside %s for %r\n" % (to, f["path"]))
+                continue
+            src_path, _ = self.dest_for(host, f["path"])
+            if not safety.contained(self.path, src_path):
+                continue
             with self.open(host, f["path"]) as src, open(dest, "wb") as out:
                 shutil.copyfileobj(src, out)
+            safety.private_file(dest)
             n += 1
         return n
 
@@ -294,7 +356,7 @@ def archive_from_scans(archive, hosts, scans_dir, log=print):
         t0 = time.time()
         kind = h.get("kind", "local")
         if kind == "ssh":
-            res = archive.archive_ssh(name, h["ssh"], srcs, log)
+            res = archive.archive_ssh(name, h, srcs, log)
         elif kind == "wsl":
             share = h.get("share_fallback") or ("//wsl$/%s" % h.get("distro", "Ubuntu"))
             res = archive.archive_local(name, srcs, prefix=share, log=log)

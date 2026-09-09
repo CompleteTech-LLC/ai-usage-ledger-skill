@@ -242,7 +242,7 @@ def main():
             if os.path.isfile(p):
                 cmd += ["--stats-cache", "%s=%s" % (h["name"], p)]
         run(cmd)
-        if accounts and os.path.isfile(accounts):
+        if accounts and os.path.isfile(accounts) and M.get("package_accounts"):  # off by default: it names people and organisations
             shutil.copy(accounts, os.path.join(pkg, "accounts.json"))
         zpath = pkg + ".zip"
         with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:

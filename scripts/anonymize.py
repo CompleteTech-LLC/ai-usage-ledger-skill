@@ -153,8 +153,13 @@ class Anonymizer:
 
     def save_map(self):
         if self.map_path:
-            with open(self.map_path, "w", encoding="utf-8") as fh:
-                json.dump(self.map, fh, indent=2, sort_keys=True)
+            try:
+                import safety
+                safety.write_private(self.map_path, json.dumps(self.map, indent=2, sort_keys=True))
+            except ImportError:  # standalone use outside the skill directory
+                fd = os.open(self.map_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(self.map, fh, indent=2, sort_keys=True)
 
 
 def anonymize_jsonl(an, src, dst, kind="events"):

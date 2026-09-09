@@ -65,6 +65,12 @@ def wrapper_body(home, python, flags=()):
 
 def write_wrapper(home, python, flags=()):
     os.makedirs(os.path.join(home, "logs"), exist_ok=True)
+    if not IS_WIN:
+        for d in (home, os.path.join(home, "logs")):
+            try:
+                os.chmod(d, 0o700)
+            except OSError:
+                pass
     p = wrapper_path(home)
     body = wrapper_body(home, python, flags)
     if IS_WIN:
