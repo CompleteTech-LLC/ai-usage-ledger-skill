@@ -38,6 +38,9 @@ scripts/validate_quality.py
 Thumbs.db
 desktop.ini
 
+# Rendered demonstration artefacts (branded with the publisher's preset) stay on GitHub; the registry bundle is neutral
+assets/examples/
+
 # Ledger working directories and generated fixtures
 scans/
 compiled/

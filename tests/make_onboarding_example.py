@@ -22,6 +22,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 ANSWERS = [
+    "none",
     "Northwind Trading Co.", "NORTHWIND TRADING CO.", "Ship it, measure it", "northwind.example · ops@northwind.example", "",
     "#1E3A8A", "Northwind Trading Co. · internal ledger", "system", "sqlite", "", "America/New_York", "y", "y", "y", "y", "y", "daily", "03:00", "mon", "n",
     "ops@build.northwind.example", "",  # one SSH host, then stop

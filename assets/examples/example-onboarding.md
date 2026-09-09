@@ -12,13 +12,14 @@ $ python3 scripts/ledger.py init
 
 AI usage ledger — onboarding. Press Enter to accept a default.
 
-Brand name shown on the dashboard and study [CompleteTech]: Northwind Trading Co.
-Eyebrow line above the name (e.g. company legal name) [COMPLETETECH LLC]: NORTHWIND TRADING CO.
-Tagline [Innovation at Every Integration]: Ship it, measure it
-Contact line (site · e-mail) [complete.tech · Timothy.Gregg@complete.tech]: northwind.example · ops@northwind.example
-Logo file (PNG/SVG path, URL, or blank for none) [<skill>/assets/logo.png]: 
+Brand preset (none = neutral, or a named preset such as completetech) [none]: none
+Brand name shown on the dashboard and study [Usage Ledger]: Northwind Trading Co.
+Eyebrow line above the name (e.g. company legal name) []: NORTHWIND TRADING CO.
+Tagline []: Ship it, measure it
+Contact line (site · e-mail) []: northwind.example · ops@northwind.example
+Logo file (PNG/SVG path, URL, or blank for none) []: 
 Accent colour (hex) [#1E3A8A]: #1E3A8A
-Footer text [CompleteTech LLC · Innovation at Every Integration · complete.tech]: Northwind Trading Co. · internal ledger
+Footer text []: Northwind Trading Co. · internal ledger
 Default theme (light / dark / system) [system]: system
 Storage backend (sqlite / json / csv) [sqlite]: sqlite
 Working directory for scans, compiled tables and reports [~/.ai-usage-ledger/ledger]: 
@@ -56,7 +57,7 @@ The saved preferences (`~/.ai-usage-ledger/config.json`, salt omitted):
 ```json
 {
   "version": 1,
-  "initialized_at": "2026-09-09T18:06:01+00:00",
+  "initialized_at": "2026-09-09T22:14:11+00:00",
   "home": "~/.ai-usage-ledger",
   "store": {
     "kind": "sqlite",
@@ -70,29 +71,10 @@ The saved preferences (`~/.ai-usage-ledger/config.json`, salt omitted):
     "eyebrow": "NORTHWIND TRADING CO.",
     "tagline": "Ship it, measure it",
     "contact": "northwind.example · ops@northwind.example",
-    "logo": "<skill>/assets/logo.png",
+    "logo": "",
     "accent": "#1E3A8A",
     "footer": "Northwind Trading Co. · internal ledger",
-    "light": {
-      "bg": "#F8FAFC",
-      "surface": "#FFFFFF",
-      "surface-2": "#EEF2FF",
-      "ink": "#0F172A",
-      "ink-2": "#1E293B",
-      "ink-3": "#64748B",
-      "line": "#E2E8F0",
-      "line-2": "#CBD5E1"
-    },
-    "dark": {
-      "bg": "#0F172A",
-      "surface": "#1E293B",
-      "surface-2": "#273449",
-      "ink": "#F1F5F9",
-      "ink-2": "#CBD5E1",
-      "ink-3": "#94A3B8",
-      "line": "#334155",
-      "line-2": "#475569"
-    }
+    "explicit": true
   },
   "detect": {
     "all_profiles": true,

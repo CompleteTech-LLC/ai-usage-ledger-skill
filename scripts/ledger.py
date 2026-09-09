@@ -55,19 +55,21 @@ def load_config():
     p = config_path()
     if not os.path.isfile(p):
         return None
-    try:
-        import safety
-        safety.warn_if_writable(p)
-    except Exception:
-        pass
+    import safety
+    safety.refuse_if_shared(p, "ledger config")
     with open(p, encoding="utf-8") as fh:
         return json.load(fh)
 
 
 def save_config(cfg):
-    os.makedirs(home_dir(), exist_ok=True)
-    with open(config_path(), "w", encoding="utf-8") as fh:
-        json.dump(cfg, fh, indent=2)
+    import safety
+    safety.private_dir(home_dir())
+    safety.write_private(config_path(), json.dumps(cfg, indent=2))
+
+
+def write_json_private(path, obj):
+    import safety
+    safety.write_private(path, json.dumps(obj, indent=2))
 
 
 def local_tz_name():
@@ -96,14 +98,30 @@ def run(cmd, **kw):
 # onboarding
 # ----------------------------------------------------------------------------
 
-DEFAULT_BRAND = {"name": "CompleteTech", "eyebrow": "COMPLETETECH LLC", "tagline": "Innovation at Every Integration",
-                 "contact": "complete.tech · Timothy.Gregg@complete.tech", "logo": os.path.join(SKILL, "assets", "logo.png"), "accent": "#1E3A8A",
-                 "footer": "CompleteTech LLC · Innovation at Every Integration · complete.tech",
-                 "light": {"bg": "#F8FAFC", "surface": "#FFFFFF", "surface-2": "#EEF2FF", "ink": "#0F172A", "ink-2": "#1E293B", "ink-3": "#64748B", "line": "#E2E8F0", "line-2": "#CBD5E1"},
-                 "dark": {"bg": "#0F172A", "surface": "#1E293B", "surface-2": "#273449", "ink": "#F1F5F9", "ink-2": "#CBD5E1", "ink-3": "#94A3B8", "line": "#334155", "line-2": "#475569"}}
+# Neutral by default: no publisher name, contact, logo or slogan appears on a report unless the operator chooses it.
+DEFAULT_BRAND = {"name": "Usage Ledger", "eyebrow": "", "tagline": "", "contact": "", "logo": "", "accent": "#1E3A8A", "footer": "", "explicit": False}
+
+# Named presets the operator can pick explicitly (`init --brand-preset completetech` or the first onboarding question).
+BRAND_PRESET_FILES = {"completetech": os.path.join(SKILL, "examples", "report_config.completetech.json")}
+
+
+def brand_preset(name):
+    path = BRAND_PRESET_FILES.get((name or "").lower())
+    if not path or not os.path.isfile(path):
+        raise SystemExit("unknown brand preset %r (available: %s)" % (name, ", ".join(sorted(BRAND_PRESET_FILES)) or "none"))
+    with open(path, encoding="utf-8") as fh:
+        b = dict((json.load(fh).get("branding") or {}))
+    if b.get("logo") and not os.path.isabs(b["logo"]):
+        b["logo"] = os.path.normpath(os.path.join(os.path.dirname(path), b["logo"]))
+        if not os.path.isfile(b["logo"]):
+            b["logo"] = os.path.join(SKILL, "assets", os.path.basename(b["logo"]))
+    b["preset"] = name.lower()
+    b["explicit"] = True
+    return b
 
 QUESTIONS = [
     # key, prompt, default-from-current, validator/choices
+    ("brand.preset", "Brand preset (none = neutral, or a named preset such as completetech)", lambda c: c["branding"].get("preset") or "none", ["none"] + sorted(BRAND_PRESET_FILES)),
     ("brand.name", "Brand name shown on the dashboard and study", lambda c: c["branding"]["name"], None),
     ("brand.eyebrow", "Eyebrow line above the name (e.g. company legal name)", lambda c: c["branding"]["eyebrow"], None),
     ("brand.tagline", "Tagline", lambda c: c["branding"]["tagline"], None),
@@ -143,8 +161,15 @@ def default_config():
 
 
 def set_dotted(cfg, key, value):
-    if key.startswith("brand."):
+    if key == "brand.preset":
+        if value and value != "none":
+            cfg["branding"] = brand_preset(value)
+        else:
+            cfg["branding"] = dict(DEFAULT_BRAND, explicit=cfg["branding"].get("explicit", False))
+            cfg["branding"].pop("preset", None)
+    elif key.startswith("brand."):
         cfg["branding"][key[6:]] = value
+        cfg["branding"]["explicit"] = True  # the operator chose this; unattended defaults never set it
     elif key == "store.kind":
         cfg["store"]["kind"] = value
         cfg["store"]["path"] = os.path.join(home_dir(), {"sqlite": "ledger.sqlite", "json": "ledger-json", "csv": "ledger-csv"}[value])
@@ -178,6 +203,8 @@ def onboard(args):
     cfg = load_config() if not args.reinit else None
     fresh = cfg is None
     cfg = cfg or default_config()
+    if getattr(args, "brand_preset", None):
+        set_dotted(cfg, "brand.preset", args.brand_preset)
     for kv in args.set or []:
         k, _, v = kv.partition("=")
         set_dotted(cfg, k.strip(), v.strip())
@@ -204,13 +231,14 @@ def onboard(args):
             cfg["extra_hosts"].append({"name": extra.split("@")[-1].split(".")[0], "kind": "ssh", "ssh": extra, "python": "python3",
                                        "claude_roots": ["~/.claude"], "codex_roots": ["~/.codex"], "_comment": "edit roots in manifest.json"})
             extra = ask("Add another SSH host? (user@host or blank)", "")
-    # write files
-    os.makedirs(home_dir(), exist_ok=True)
+    # write files (owner-only: they name accounts, hosts and what will be executed)
+    import safety
+    safety.private_dir(home_dir())
     if fresh or not os.path.isfile(cfg["pricing_path"]):
-        shutil.copy(os.path.join(SKILL, "templates", "pricing.json"), cfg["pricing_path"])
+        with open(os.path.join(SKILL, "templates", "pricing.json"), encoding="utf-8") as fh:
+            safety.write_private(cfg["pricing_path"], fh.read())
     if fresh or not os.path.isfile(cfg["accounts_path"]) or args.reinit:
-        with open(cfg["accounts_path"], "w", encoding="utf-8") as fh:
-            json.dump(accounts, fh, indent=2)
+        write_json_private(cfg["accounts_path"], accounts)
     write_manifest(cfg, hosts)
     write_report_config(cfg)
     if fresh or not cfg.get("initialized_at"):
@@ -246,18 +274,18 @@ def write_manifest(cfg, hosts):
     clean += cfg.get("extra_hosts", [])
     m = {"_comment": "Generated by ledger.py from detect_hosts.py; hand-added hosts live in config.json extra_hosts and survive regeneration.",
          "workdir": cfg["workdir"], "snapshot_date": None, "timezone": cfg["timezone"], "package_prefix": cfg["package_prefix"],
-         "pricing": cfg["pricing_path"], "accounts": cfg["accounts_path"], "report_config": cfg["report_config_path"], "hosts": clean}
-    with open(cfg["manifest_path"], "w", encoding="utf-8") as fh:
-        json.dump(m, fh, indent=2)
+         "pricing": cfg["pricing_path"], "accounts": cfg["accounts_path"], "report_config": cfg["report_config_path"], "package_accounts": False, "hosts": clean}
+    write_json_private(cfg["manifest_path"], m)
 
 
 def write_report_config(cfg):
-    b = cfg["branding"]
+    b = dict(cfg["branding"])
+    if not b.get("explicit"):  # unattended defaults: an unbranded report that says so, never a publisher identity
+        b = {"name": "Usage Ledger", "accent": b.get("accent", "#1E3A8A"), "footer": "Unbranded report: run `ledger.py init` to set your own branding."}
     rc = {"title": "AI coding-agent usage: token volume, caching and cost study", "html_title": "Agent Usage Study", "dashboard_title": "Agent Token Ledger",
           "prices_as_of": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "theme_default": cfg.get("theme", "system"), "hosts": {}, "excluded_sources": [], "extra_limitations": [],
           "dashboard_excluded_note": "", "branding": b}
-    with open(cfg["report_config_path"], "w", encoding="utf-8") as fh:
-        json.dump(rc, fh, indent=2)
+    write_json_private(cfg["report_config_path"], rc)
 
 
 # ----------------------------------------------------------------------------
@@ -304,10 +332,8 @@ def filter_manifest(src, dst, only=None, skip=None):
 def do_run(args):
     cfg = load_config()
     if cfg is None:
-        print("No configuration yet; running onboarding with defaults (use `init` for the interactive version).")
-        ns = argparse.Namespace(yes=True, reinit=False, set=[])
-        onboard(ns)
-        cfg = load_config()
+        raise SystemExit("No configuration at %s. Run `python3 scripts/ledger.py init` first (interactive), or `init --yes` for neutral defaults; "
+                         "nothing is scanned and no branding is chosen without that step." % config_path())
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
     t0 = time.time()
     if cfg["detect"].get("on_every_run", True) and not args.no_detect:
@@ -381,7 +407,7 @@ def build_anonymized(cfg, st, work, py, pipeline):
     if not salt:
         salt = cfg["anonymize"]["salt"] = secrets.token_hex(16)
         save_config(cfg)
-    an = anonymize.Anonymizer(salt, os.path.join(home_dir(), "anonymize-map.json"))
+    an = anonymize.Anonymizer(salt, os.path.join(home_dir(), "anonymize-map.json"))  # the map is written 0600 by the anonymiser
     root = os.path.join(work, "anonymized")
     export = os.path.join(root, "store-export")
     scans = os.path.join(root, "scans")
@@ -561,7 +587,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     i = sub.add_parser("init", help="first-run onboarding")
-    i.add_argument("--yes", action="store_true", help="accept defaults without prompting (for agents and CI)")
+    i.add_argument("--yes", action="store_true", help="accept defaults without prompting (for agents and CI); branding stays neutral unless --brand-preset or --set brand.* is given")
+    i.add_argument("--brand-preset", help="apply a named brand preset explicitly (e.g. completetech)")
     i.add_argument("--set", action="append", help="override a preference, e.g. --set brand.name=Acme --set store.kind=json")
     i.add_argument("--reinit", action="store_true", help=argparse.SUPPRESS)
     i.set_defaults(fn=onboard)
@@ -600,6 +627,7 @@ def main():
     dc.set_defaults(fn=do_doc)
     ri = sub.add_parser("reinit", help="fresh onboarding; the previous store is kept with a timestamp")
     ri.add_argument("--yes", action="store_true")
+    ri.add_argument("--brand-preset")
     ri.add_argument("--set", action="append")
     ri.set_defaults(fn=do_reinit)
     if len(sys.argv) > 1 and sys.argv[1] == "doc":  # everything after `doc` belongs to the renderer, including --list
