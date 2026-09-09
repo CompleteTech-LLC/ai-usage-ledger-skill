@@ -130,6 +130,9 @@ def run():
     inv = json.load(open(os.path.join(OUT, "inventory.fixture.json"), encoding="utf-8"))
     print("replay skipped:", inv["codex_replay_skipped"], "(expect 2)")
     ok = ok and inv["codex_replay_skipped"] == 2
+    per_root = all(r.get("files", 0) >= 1 and r.get("bytes", 0) > 0 and "errors" in r for r in inv["roots"])
+    print("per-root inventory counts (files, bytes, errors):", "OK" if per_root else "MISSING", [(r["tool"], r.get("files")) for r in inv["roots"]])
+    ok = ok and per_root
     print("ALL OK" if ok else "SOME CHECKS FAILED")
     return 0 if ok else 1
 

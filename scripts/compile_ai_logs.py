@@ -1083,73 +1083,73 @@ def cmd_scan(a):
     pr_path = os.path.join(a.out_dir, "prompts.%s.jsonl" % a.host)
     with open(ev_path, "w", encoding="utf-8") as out, open(pr_path, "w", encoding="utf-8") as outp:
         for root in a.claude_root or []:
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_claude(root, a.host, out, stats, seen, session_meta)
             np_ = scan_claude_history(root, a.host, outp)
-            inventory.append({"tool": "claude-code", "host": a.host, "root": root, "events": stats.events - n0, "prompts": np_})
+            inventory.append({"tool": "claude-code", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0, "prompts": np_})
             stats.log("claude root done %s" % root)
         for root in a.codex_root or []:
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             rows = load_codex_threads(root)
             scan_codex(root, a.host, out, stats, session_meta, rows)
             np_ = scan_codex_history(root, a.host, outp)
-            inventory.append({"tool": "codex", "host": a.host, "root": root, "events": stats.events - n0, "prompts": np_,
+            inventory.append({"tool": "codex", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0, "prompts": np_,
                               "sqlite_threads": len(rows), "sqlite_tokens_used": sum((r.get("tokens_used") or 0) for r in rows.values())})
             stats.log("codex root done %s" % root)
         for root in a.copilot_root or []:
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_copilot(root, a.host, out, stats, session_meta, outp)
-            inventory.append({"tool": "copilot-cli", "host": a.host, "root": root, "events": stats.events - n0})
+            inventory.append({"tool": "copilot-cli", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
         for db in a.opencode_db or []:
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_opencode(db, a.host, out, stats, session_meta, outp)
-            inventory.append({"tool": "opencode", "host": a.host, "root": db, "events": stats.events - n0})
+            inventory.append({"tool": "opencode", "host": a.host, "root": db, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
         openclaw_seen = set()
         for root in a.openclaw_root or []:
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_openclaw(root, a.host, out, stats, session_meta, outp, openclaw_seen)
-            inventory.append({"tool": "openclaw", "host": a.host, "root": root, "events": stats.events - n0})
+            inventory.append({"tool": "openclaw", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
         for root in a.pi_root or []:
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             pi_seen = set()
             scan_openclaw(root, a.host, out, stats, session_meta, outp, pi_seen, tool="pi")
-            inventory.append({"tool": "pi", "host": a.host, "root": root, "events": stats.events - n0})
+            inventory.append({"tool": "pi", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
         for root in a.gemini_root or []:
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_gemini(root, a.host, out, stats, session_meta, outp, "gemini-cli")
-            inventory.append({"tool": "gemini-cli", "host": a.host, "root": root, "events": stats.events - n0})
+            inventory.append({"tool": "gemini-cli", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
         for root in a.qwen_root or []:
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_gemini(root, a.host, out, stats, session_meta, outp, "qwen-code")
-            inventory.append({"tool": "qwen-code", "host": a.host, "root": root, "events": stats.events - n0})
+            inventory.append({"tool": "qwen-code", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
         for spec in a.cline_root or []:
             tool, _, root = spec.partition("=") if "=" in spec else ("cline", "", spec)
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_cline(root, a.host, out, stats, session_meta, outp, tool or "cline")
-            inventory.append({"tool": tool or "cline", "host": a.host, "root": root, "events": stats.events - n0})
+            inventory.append({"tool": tool or "cline", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
         for root in a.aider_root or []:
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_aider(root, a.host, out, stats, session_meta, outp)
-            inventory.append({"tool": "aider", "host": a.host, "root": root, "events": stats.events - n0})
+            inventory.append({"tool": "aider", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
         for root in a.kimi_root or []:
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_kimi(root, a.host, out, stats, session_meta, outp)
-            inventory.append({"tool": "kimi", "host": a.host, "root": root, "events": stats.events - n0})
+            inventory.append({"tool": "kimi", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
         for root in a.vibe_root or []:
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_vibe(root, a.host, out, stats, session_meta, outp)
-            inventory.append({"tool": "mistral-vibe", "host": a.host, "root": root, "events": stats.events - n0})
+            inventory.append({"tool": "mistral-vibe", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
         for root in a.continue_root or []:
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_continue(root, a.host, out, stats, session_meta, outp)
-            inventory.append({"tool": "continue", "host": a.host, "root": root, "events": stats.events - n0})
+            inventory.append({"tool": "continue", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
         for spec in a.generic_root or []:
             tool, _, root = spec.partition("=")
             if not root:
                 tool, root = "generic", tool
-            n0 = stats.events
+            n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_generic(root, a.host, out, stats, session_meta, outp, tool)
-            inventory.append({"tool": tool, "host": a.host, "root": root, "events": stats.events - n0, "note": "generic usage sniffer; verify on a sample"})
+            inventory.append({"tool": tool, "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0, "note": "generic usage sniffer; verify on a sample"})
     with open(os.path.join(a.out_dir, "sessions.%s.jsonl" % a.host), "w", encoding="utf-8") as f:
         for s in session_meta:
             f.write(json.dumps(s) + "\n")

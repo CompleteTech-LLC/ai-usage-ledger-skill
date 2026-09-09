@@ -2,7 +2,7 @@
 name: ai-usage-ledger
 description: >-
   Compile every locally recorded AI coding-agent model call (Claude Code, Codex CLI/Desktop, GitHub Copilot CLI, Gemini CLI, opencode, OpenClaw, Cline/Roo/Kilo, aider, Kimi Code, Mistral Vibe, Continue, pi, Codebuff and any JSON-logging tool) across all drives, user profiles, WSL distros and SSH hosts into one append-only, de-duplicated ledger stored as SQLite, JSON or CSV; price it at list API rates; split it by subscription account and billing plan; validate it against the tools' own counters; and render a branded light/dark dashboard plus a research-grade study package. Onboards once (branding, theme, storage backend, scheduled refresh, anonymised publication copy; hosts and accounts auto-detected per OS), remembers the preferences, refreshes with one command or on a schedule, renders fifteen ledger documents (statements, memos, briefs, billing evidence) as Markdown, HTML, PDF and DOCX, can anonymise everything for publication, optionally archives the raw log files themselves so they outlive the tools' retention, and answers detailed questions (per day, project, account, model, session, prompt text, or inside the archived logs) through a query layer over the accumulated store. Use when asked to "find all my AI logs", "how many tokens did I use", "what would this have cost on the API", "compare my subscriptions", "usage by account", "cache savings", "set up my usage ledger", "monthly usage statement", "publish my usage anonymously", "how much did I use last Tuesday", "which sessions cost the most", "when did I first use model X", "find the session where I asked about Y", or to refresh an existing ledger.
-version: 1.5.2
+version: 1.5.3
 metadata:
   openclaw:
     skillKey: ai-usage-ledger
@@ -90,7 +90,7 @@ metadata:
 | `references/harness-catalog.md` | Forty-plus agents, IDE assistants, gateways and runtimes: paths per OS, record shapes, token fields, scanner support. |
 | `references/log-formats.md` | Exact fields per built-in parser, de-duplication and replay rules, normalised schema. |
 | `references/discovery.md` | Where logs and credentials live, sweep commands, reading accounts safely, defensible attribution rules. |
-| `references/pitfalls.md` | Sixteen ways the numbers go wrong. |
+| `references/pitfalls.md` | Seventeen ways the numbers go wrong. |
 | `references/harnesses.md` | Install locations and notes for Claude Code, Codex, Cursor, SSH, WSL and macOS. |
 | `references/ledger-document-catalog.md` | Fifteen ledger documents (executive summary, monthly statement, quarterly review, account statement, subscription memo and renewal recommendation, cache brief, budget forecast, project allocation, billing evidence, model mix, tool adoption, host inventory, data-quality note, correction notice) with their placeholders. |
 | `references/template-index.json` | Machine-readable index of the catalog used by the renderer. |
