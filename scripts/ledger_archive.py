@@ -189,7 +189,7 @@ class Archive:
 
     # ---- ssh ------------------------------------------------------------------
     # fixed remote commands: paths never enter the command line; they arrive NUL-delimited on stdin
-    REMOTE_STAT = "xargs -0 -r stat -c '%s %Y %n' --"
+    REMOTE_STAT = "xargs -0 -r stat -c '%s %Y %n' -- 2>/dev/null"  # constant; missing files are simply absent from the output
     REMOTE_TAR = "tar czf - --null -T -"
 
     def archive_ssh(self, host, ssh_cfg, paths, log=print):
@@ -217,7 +217,7 @@ class Archive:
             return 0, 0, 0
         # size+mtime first so unchanged files are not transferred (bytes mode: no CRLF translation on Windows)
         r = subprocess.run(["ssh", "-o", "BatchMode=yes", "--", target, self.REMOTE_STAT], input=("\0".join(wanted) + "\0").encode("utf-8"), capture_output=True)
-        if r.returncode != 0:
+        if r.returncode not in (0, 123):  # 123: xargs ran but some files did not exist, which is expected for optional counters
             log("  ssh stat failed for %s: %s" % (host, r.stderr.decode("utf-8", "replace")[-300:]))
         remote = {}
         for line in r.stdout.decode("utf-8", "replace").splitlines():
