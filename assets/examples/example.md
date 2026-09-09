@@ -339,8 +339,8 @@ python scripts/run_pipeline.py --manifest manifest.json --only report,analyze,bu
 | analyze_events.py | `8afe1edae8d10bbe4a64e07ba78168ad8b90464bfed638041581b1f565a18853` |
 | build_report.py | `286ba286628b992bdf95a6daa0f0a91e89ddc7a9c0b8d0dabd8aa7dcc277dadf` |
 | pricing.json | `d7690e151fffd3cd506def4d2346cccbbf80ddf19fcdf6d9dfddcf0afcead1fc` |
-| summary.json | `3ee75c53aeb7fb3a549cd1f3446d438f81fcceddf066368fbd4cfee5dd213bd5` |
-| analysis.json | `e21fd93e7e98d885e74623ceb102b4ebcd1aeb87e9634a4c366fed28640ce88d` |
+| summary.json | `67cdcab26f0bcb8e46ea4aba90d21066fd4c2b831e36033186f1988af9decbc0` |
+| analysis.json | `1e36bbb6bd5d44792516a42e29b37bdef46147476bfb0edaef0c8f75c6c71cb0` |
 
 The event-level dataset (`compiled/all_events.csv`, 13 rows, one per model call with every token class, the pricing row applied, the account assigned and the source file path) is the primary artefact; every table above is an aggregation of it.
 

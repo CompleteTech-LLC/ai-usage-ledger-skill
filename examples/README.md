@@ -15,4 +15,4 @@ For a manual, store-less run copy the two files to a working directory, replace 
 python3 scripts/run_pipeline.py --manifest manifest.workstation.json
 ```
 
-`manifest.fixtures.json` and `accounts.fixtures.json` drive the synthetic example in `assets/examples/`.
+`manifest.fixtures.json` and `accounts.fixtures.json` drive the synthetic example in `assets/examples/`, including the executive-summary PDF and DOCX rendered from `references/ledger-document-catalog.md` with `scripts/render_ledger_doc.py`.

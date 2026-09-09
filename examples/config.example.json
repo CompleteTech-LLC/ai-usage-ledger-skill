@@ -24,6 +24,8 @@
   "report_config_path": "/home/<you>/.ai-usage-ledger/report_config.json",
   "manifest_path": "/home/<you>/.ai-usage-ledger/manifest.json",
   "package_prefix": "AI_Usage_Ledger",
+  "anonymize": {"on_every_run": false, "salt": "<32 hex characters generated at onboarding; keep private>"},
+  "schedule": {"frequency": "daily", "time": "03:00", "weekday": "mon", "install": false, "installed_at": "2026-09-09T14:00:30+00:00"},
   "extra_hosts": [
     {"name": "train", "kind": "ssh", "ssh": "<you>@train.example.net", "python": "python3", "claude_roots": ["~/.claude"], "codex_roots": ["~/.codex"]}
   ]

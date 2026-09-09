@@ -7,7 +7,9 @@ Store, onboarding and end-to-end `ledger run` checks on the synthetic fixtures.
 Covers: every backend (sqlite, json, csv) ingests the fixture scan once and skips it entirely the second
 time; exported events reproduce the scanner totals; `ledger.py init --yes` writes a config, manifest and
 accounts draft without prompting; `ledger.py run --no-detect` scans the fixture host into the store and
-renders the dashboard and study; a second run adds nothing; `status` and `export` work.
+renders the dashboard and study; a second run adds nothing; `status` and `export` work; `run --anonymize`
+produces a copy with no real host, path or account label in it; `schedule install --dry-run` prints the
+platform command without installing; every catalog template renders with no ledger placeholder left.
 """
 import json
 import os
@@ -113,6 +115,63 @@ def check_cli(scan_dir):
     rows = sum(1 for _ in open(out_csv, encoding="utf-8")) - 1
     good = rows == n and "wrote" in e.stdout
     print("export:  %d rows  %s" % (rows, "OK" if good else "FAIL"))
+    ok = ok and good
+    # anonymised copy: no fixture host name, no local path, no example e-mail anywhere in the anonymised tables
+    r3 = run([py, ledger, "run", "--no-detect", "--no-scan", "--anonymize"], env=env)
+    anon = os.path.join(cfg["workdir"], "anonymized")
+    leaks = 0
+    checked = 0
+    for fn in ("all_events.csv", "all_sessions.csv", "summary.json", "SUMMARY.md"):
+        p = os.path.join(anon, "compiled", fn)
+        if os.path.isfile(p):
+            checked += 1
+            txt = open(p, encoding="utf-8", errors="replace").read()
+            leaks += sum(txt.count(needle) for needle in ("fixture", "example@example.com", FX.replace("\\", "/"), FX))
+    anon_pkgs = [d for d in os.listdir(os.path.join(anon, "reports")) if d.endswith(".zip")] if os.path.isdir(os.path.join(anon, "reports")) else []
+    anon_rows = sum(1 for _ in open(os.path.join(anon, "compiled", "all_events.csv"), encoding="utf-8")) - 1 if os.path.isfile(os.path.join(anon, "compiled", "all_events.csv")) else 0
+    good = checked == 4 and leaks == 0 and anon_rows == n and bool(anon_pkgs) and os.path.isfile(os.path.join(home, "anonymize-map.json"))
+    print("anonym:  %d files checked, %d leaks, %d rows, package %s, map %s  %s" % (checked, leaks, anon_rows, "yes" if anon_pkgs else "no", "yes" if os.path.isfile(os.path.join(home, "anonymize-map.json")) else "no", "OK" if good else "FAIL"))
+    if not good:
+        sys.stdout.write(r3.stdout[-2000:])
+    ok = ok and good
+    e2 = run([py, ledger, "export", "--anonymize", "--format", "jsonl", "--out", os.path.join(OUT, "anon.jsonl")], env=env)
+    txt = open(os.path.join(OUT, "anon.jsonl"), encoding="utf-8").read()
+    good = "wrote %d" % n in e2.stdout and "fixture" not in txt and "src" not in txt and "host-" in txt
+    print("anon export: %s" % ("OK" if good else "FAIL"))
+    ok = ok and good
+    # schedule: dry run only (never installs anything on the test machine)
+    s1 = run([py, ledger, "schedule", "install", "--frequency", "weekly", "--time", "04:15", "--weekday", "fri", "--dry-run"], env=env)
+    s2 = run([py, ledger, "schedule", "remove", "--dry-run"], env=env)
+    good = ("schtasks" in s1.stdout or "crontab" in s1.stdout) and ("04:15" in s1.stdout or "15 4" in s1.stdout) and ("FRI" in s1.stdout or "* * 5" in s1.stdout) and ("schtasks" in s2.stdout or "crontab" in s2.stdout)
+    cfg2 = json.load(open(os.path.join(home, "config.json"), encoding="utf-8"))
+    good = good and cfg2.get("schedule", {}).get("frequency") == "none"  # dry run must not change the saved preference
+    print("schedule dry-run: %s" % ("OK" if good else "FAIL\n" + s1.stdout + s2.stdout))
+    ok = ok and good
+    # documents: every template renders with no ledger placeholder left; user-only placeholders may remain
+    user_only = {"contract_id", "billing_period", "previous_value", "corrected_value", "cause", "affected_documents"}
+    import re
+    idx = json.load(open(os.path.join(ROOT, "references", "template-index.json"), encoding="utf-8"))["templates"]
+    bad = []
+    for t in idx:
+        outp = os.path.join(OUT, "docs", t["id"] + ".md")
+        r = run([py, ledger, "doc", "--template", t["id"], "--out", outp, "--var", "prepared_for=Test Reader", "--var", "reference=T-1"], env=env, check=False)
+        if r.returncode != 0 or not os.path.isfile(outp):
+            bad.append((t["id"], "render failed: " + r.stderr[-300:]))
+            continue
+        left = set(re.findall(r"\{([a-z_]+)\}", open(outp, encoding="utf-8").read())) - user_only
+        if left:
+            bad.append((t["id"], "unfilled: " + ", ".join(sorted(left))))
+        if not os.path.isfile(outp[:-3] + ".html"):
+            bad.append((t["id"], "no html"))
+    anon_doc = run([py, ledger, "doc", "--template", "executive-summary", "--anonymize", "--out", os.path.join(OUT, "docs", "anon.md")], env=env, check=False)
+    atxt = open(os.path.join(OUT, "docs", "anon.md"), encoding="utf-8").read() if os.path.isfile(os.path.join(OUT, "docs", "anon.md")) else ""
+    if anon_doc.returncode != 0 or "fixture" in atxt or "Anonymised" not in atxt:
+        bad.append(("executive-summary --anonymize", "leak or failure"))
+    lst = run([py, ledger, "doc", "--list"], env=env)
+    if len([x for x in lst.stdout.splitlines() if x.strip()]) != len(idx):
+        bad.append(("--list", "count mismatch"))
+    good = not bad
+    print("documents: %d templates rendered%s  %s" % (len(idx), "" if good else "; " + "; ".join("%s (%s)" % b for b in bad), "OK" if good else "FAIL"))
     ok = ok and good
     return ok
 

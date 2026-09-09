@@ -6,6 +6,10 @@ ledger.py - the one entry point people and agents use day to day.
     python3 scripts/ledger.py run             # scan every configured host, append new calls to the store, rebuild the reports
     python3 scripts/ledger.py status          # what is configured, what is stored, when it last ran
     python3 scripts/ledger.py export --format csv --out events.csv
+    python3 scripts/ledger.py run --anonymize # also build a publishable copy: hosts, projects, accounts pseudonymised
+    python3 scripts/ledger.py doc --list      # ledger documents (statements, memos, briefs) from the catalog
+    python3 scripts/ledger.py doc --template executive-summary --pdf --docx
+    python3 scripts/ledger.py schedule install|remove|status   # Task Scheduler / cron refresh
     python3 scripts/ledger.py reinit          # fresh onboarding; the old store is kept aside with a timestamp
 
 Preferences (branding, storage backend, working directory, timezone, auto-detection) are captured once,
@@ -17,6 +21,7 @@ Standard library only.
 import argparse
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -26,8 +31,10 @@ from datetime import datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+import anonymize  # noqa: E402
 import detect_hosts  # noqa: E402
 import ledger_store  # noqa: E402
+import schedule  # noqa: E402
 
 CONFIG_VERSION = 1
 
@@ -101,6 +108,11 @@ QUESTIONS = [
     ("timezone", "Timezone for time-of-day analysis", lambda c: c["timezone"], None),
     ("detect.all_profiles", "Also scan other user profiles and other drives on this machine? (y/n)", lambda c: "y" if c["detect"]["all_profiles"] else "n", ["y", "n"]),
     ("detect.wsl", "Probe WSL distros on Windows? (y/n)", lambda c: "y" if c["detect"]["wsl"] else "n", ["y", "n"]),
+    ("anonymize.on_every_run", "Also build an anonymised copy for publication on every run? (y/n)", lambda c: "y" if c["anonymize"]["on_every_run"] else "n", ["y", "n"]),
+    ("schedule.frequency", "Refresh automatically? (none / daily / weekly / monthly)", lambda c: c["schedule"]["frequency"], ["none", "daily", "weekly", "monthly"]),
+    ("schedule.time", "At what local time? (HH:MM)", lambda c: c["schedule"]["time"], None),
+    ("schedule.weekday", "Weekday for a weekly refresh (mon..sun)", lambda c: c["schedule"]["weekday"], sorted(schedule.WEEKDAYS)),
+    ("schedule.install", "Install the scheduled task / cron entry now? (y/n)", lambda c: "y" if c["schedule"].get("install") else "n", ["y", "n"]),
 ]
 
 
@@ -113,6 +125,8 @@ def default_config():
         "pricing_path": os.path.join(home_dir(), "pricing.json"), "accounts_path": os.path.join(home_dir(), "accounts.json"),
         "report_config_path": os.path.join(home_dir(), "report_config.json"), "manifest_path": os.path.join(home_dir(), "manifest.json"),
         "package_prefix": "AI_Usage_Ledger", "extra_hosts": [],
+        "anonymize": {"on_every_run": False, "salt": secrets.token_hex(16)},
+        "schedule": {"frequency": "none", "time": "03:00", "weekday": "mon", "install": False, "installed_at": None},
     }
 
 
@@ -124,6 +138,12 @@ def set_dotted(cfg, key, value):
         cfg["store"]["path"] = os.path.join(home_dir(), {"sqlite": "ledger.sqlite", "json": "ledger-json", "csv": "ledger-csv"}[value])
     elif key.startswith("detect."):
         cfg["detect"][key[7:]] = value in ("y", "yes", "true", True)
+    elif key == "anonymize.on_every_run":
+        cfg.setdefault("anonymize", {"salt": secrets.token_hex(16)})["on_every_run"] = value in ("y", "yes", "true", True)
+    elif key == "schedule.install":
+        cfg.setdefault("schedule", {})["install"] = value in ("y", "yes", "true", True)
+    elif key.startswith("schedule."):
+        cfg.setdefault("schedule", {})[key[9:]] = value
     else:
         cfg[key] = value
 
@@ -179,7 +199,19 @@ def onboard(args):
     write_report_config(cfg)
     if fresh or not cfg.get("initialized_at"):
         cfg["initialized_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    cfg.setdefault("anonymize", {"on_every_run": False, "salt": secrets.token_hex(16)})
+    cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon", "install": False, "installed_at": None})
     save_config(cfg)
+    sch = cfg["schedule"]
+    if sch.get("install") and sch.get("frequency", "none") != "none":
+        rc = schedule.install(home_dir(), sys.executable, sch["frequency"], sch.get("time", "03:00"), sch.get("weekday", "mon"),
+                              "--anonymize" if cfg["anonymize"].get("on_every_run") else "")
+        sch["installed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds") if rc == 0 else None
+        sch["install"] = False  # one-shot; the saved frequency documents what is installed
+        save_config(cfg)
+        print("Scheduled refresh: %s at %s (%s)" % (sch["frequency"], sch.get("time"), "installed" if rc == 0 else "FAILED to install; run `ledger.py schedule install`"))
+    elif sch.get("frequency", "none") != "none":
+        print("Scheduled refresh preference saved (%s at %s); install it with: python3 scripts/ledger.py schedule install" % (sch["frequency"], sch.get("time")))
     st = ledger_store.Store.open(cfg["store"]["kind"], cfg["store"]["path"])
     for k, v in cfg.items():
         st.set_pref(k, v)
@@ -265,11 +297,74 @@ def do_run(args):
     run([py, os.path.join(HERE, "compile_ai_logs.py"), "report", "--events", paths["events"][0], "--sessions", paths["sessions"][0], "--prompts", paths["prompts"][0],
          "--inventory", inv, "--pricing", cfg["pricing_path"], "--accounts", cfg["accounts_path"], "--out-dir", compiled])
     run([py, pipeline, "--manifest", cfg["manifest_path"], "--only", "analyze,build"])
+    anon_out = None
+    if args.anonymize or cfg.get("anonymize", {}).get("on_every_run"):
+        anon_out = build_anonymized(cfg, st, work, py, pipeline)
     meta = {"started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "seconds": round(time.time() - t0, 1),
-            "added": added, "skipped": skipped, "store_counts": counts, "workdir": work}
+            "added": added, "skipped": skipped, "store_counts": counts, "workdir": work, "anonymized": anon_out}
     st.record_run(meta)
     st.close()
     print("run recorded: %s events in store (%s added this run), %.0fs" % (counts["events"], added["events"], meta["seconds"]))
+
+
+def build_anonymized(cfg, st, work, py, pipeline):
+    """A second compiled/ + reports/ tree under <workdir>/anonymized with hosts, projects and accounts pseudonymised."""
+    salt = cfg.setdefault("anonymize", {}).get("salt")
+    if not salt:
+        salt = cfg["anonymize"]["salt"] = secrets.token_hex(16)
+        save_config(cfg)
+    an = anonymize.Anonymizer(salt, os.path.join(home_dir(), "anonymize-map.json"))
+    root = os.path.join(work, "anonymized")
+    export = os.path.join(root, "store-export")
+    scans = os.path.join(root, "scans")
+    compiled = os.path.join(root, "compiled")
+    for d in (export, scans, compiled):
+        os.makedirs(d, exist_ok=True)
+    ev = os.path.join(export, "events.anon.jsonl")
+    se = os.path.join(export, "sessions.anon.jsonl")
+    n = 0
+    with open(ev, "w", encoding="utf-8") as fh:
+        for e in st.iter_events():
+            fh.write(json.dumps(an.event(e)) + "\n")
+            n += 1
+    with open(se, "w", encoding="utf-8") as fh:
+        for s in st.iter_table("sessions"):
+            fh.write(json.dumps(an.session_row(s)) + "\n")
+    # inventories: one anonymised copy per real host
+    import glob as _glob
+    for p in _glob.glob(os.path.join(work, "scans", "*", "inventory.*.json")):
+        with open(p, encoding="utf-8") as fh:
+            inv = an.inventory(json.load(fh))
+        d = os.path.join(scans, inv["host"])
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "inventory.%s.json" % inv["host"]), "w", encoding="utf-8") as fh:
+            json.dump(inv, fh)
+    with open(cfg["accounts_path"], encoding="utf-8") as fh:
+        AC = json.load(fh)
+    acc_path = os.path.join(root, "accounts.json")
+    with open(acc_path, "w", encoding="utf-8") as fh:
+        json.dump(an.accounts(AC), fh, indent=2)
+    with open(cfg["report_config_path"], encoding="utf-8") as fh:
+        rc = json.load(fh)
+    rc["hosts"] = {}
+    rc.pop("claude_primary_host", None)
+    rc["dashboard_excluded_note"] = ""
+    rc["title"] = (rc.get("title") or "AI coding-agent usage study") + " (anonymised for publication)"
+    rc.setdefault("extra_limitations", []).append("Anonymised: host names, working directories, session ids and account identities are replaced by salted pseudonyms; source paths and prompts are removed.")
+    rc_path = os.path.join(root, "report_config.json")
+    with open(rc_path, "w", encoding="utf-8") as fh:
+        json.dump(rc, fh, indent=2)
+    an.save_map()
+    run([py, os.path.join(HERE, "compile_ai_logs.py"), "report", "--events", ev, "--sessions", se, "--inventory", os.path.join(scans, "*", "inventory.*.json"),
+         "--pricing", cfg["pricing_path"], "--accounts", acc_path, "--out-dir", compiled])
+    manifest = {"_comment": "generated for the anonymised build", "workdir": ".", "timezone": cfg.get("timezone", "UTC"), "package_prefix": cfg.get("package_prefix", "AI_Usage_Ledger") + "_anonymized",
+                "pricing": cfg["pricing_path"], "accounts": acc_path, "report_config": rc_path, "hosts": []}
+    mpath = os.path.join(root, "manifest.json")
+    with open(mpath, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+    run([py, pipeline, "--manifest", mpath, "--only", "analyze,build"])
+    print("anonymised copy: %s (%d events; private map at %s)" % (root, n, os.path.join(home_dir(), "anonymize-map.json")))
+    return root
 
 
 def do_status(args):
@@ -285,6 +380,10 @@ def do_status(args):
     print("last run: %s" % (json.dumps({k: lr[k] for k in ("finished_at", "seconds", "added") if k in lr}) if lr else "never"))
     print("workdir:  %s" % cfg["workdir"])
     print("brand:    %s · %s · accent %s · theme %s" % (cfg["branding"].get("name"), cfg["branding"].get("tagline"), cfg["branding"].get("accent"), cfg.get("theme")))
+    sch = cfg.get("schedule") or {}
+    print("schedule: %s%s" % (sch.get("frequency", "none"), (" at %s" % sch.get("time")) if sch.get("frequency", "none") != "none" else ""))
+    schedule.status(home_dir())
+    print("anonymise on every run: %s" % ("yes" if (cfg.get("anonymize") or {}).get("on_every_run") else "no"))
     try:
         with open(cfg["manifest_path"], encoding="utf-8") as fh:
             m = json.load(fh)
@@ -299,9 +398,47 @@ def do_export(args):
     if cfg is None:
         raise SystemExit("not initialised; run init first")
     st = ledger_store.Store.open(cfg["store"]["kind"], cfg["store"]["path"])
-    n = ledger_store.export_table(st, args.table, args.format, args.out)
+    if args.anonymize:
+        if args.table == "prompts":
+            raise SystemExit("prompts are never exported anonymised; they contain the user's own text")
+        an = anonymize.Anonymizer(cfg.setdefault("anonymize", {}).get("salt") or secrets.token_hex(16))
+        rows = (an.event(e) for e in st.iter_events()) if args.table == "events" else (an.session_row(s) for s in st.iter_table("sessions"))
+        n = ledger_store.export_rows(rows, args.table, args.format, args.out)
+    else:
+        n = ledger_store.export_table(st, args.table, args.format, args.out)
     st.close()
-    print("wrote %d %s to %s" % (n, args.table, args.out))
+    print("wrote %d %s to %s%s" % (n, args.table, args.out, " (anonymised)" if args.anonymize else ""))
+
+
+def do_schedule(args):
+    cfg = load_config()
+    if cfg is None:
+        raise SystemExit("not initialised; run init first")
+    sch = cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon"})
+    if args.action == "install":
+        freq = args.frequency or sch.get("frequency") or "daily"
+        if freq == "none":
+            freq = "daily"
+        t = args.time or sch.get("time") or "03:00"
+        wd = args.weekday or sch.get("weekday") or "mon"
+        rc = schedule.install(home_dir(), sys.executable, freq, t, wd, "--anonymize" if cfg.get("anonymize", {}).get("on_every_run") else "", args.dry_run)
+        if rc == 0 and not args.dry_run:
+            sch.update({"frequency": freq, "time": t, "weekday": wd, "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+            save_config(cfg)
+        return rc
+    if args.action == "remove":
+        rc = schedule.remove(home_dir(), args.dry_run)
+        if rc == 0 and not args.dry_run:
+            sch.update({"frequency": "none", "installed_at": None})
+            save_config(cfg)
+        return rc
+    return schedule.status(home_dir())
+
+
+def do_doc(args):
+    cmd = [sys.executable, os.path.join(HERE, "render_ledger_doc.py")] + args.rest
+    r = subprocess.run(cmd)
+    return r.returncode
 
 
 def do_reinit(args):
@@ -327,6 +464,7 @@ def main():
     r.add_argument("--hosts", help="comma list of host names to scan")
     r.add_argument("--no-scan", action="store_true", help="rebuild from the store without rescanning")
     r.add_argument("--no-detect", action="store_true", help="do not refresh the manifest from detection")
+    r.add_argument("--anonymize", action="store_true", help="also build the anonymised copy under <workdir>/anonymized")
     r.set_defaults(fn=do_run)
     s = sub.add_parser("status")
     s.set_defaults(fn=do_status)
@@ -334,13 +472,28 @@ def main():
     e.add_argument("--table", default="events", choices=["events", "sessions", "prompts"])
     e.add_argument("--format", default="csv", choices=["csv", "json", "jsonl"])
     e.add_argument("--out", required=True)
+    e.add_argument("--anonymize", action="store_true", help="pseudonymise hosts, sessions, projects and accounts; drop paths")
     e.set_defaults(fn=do_export)
+    sc = sub.add_parser("schedule", help="install, remove or show the scheduled refresh (Task Scheduler / cron)")
+    sc.add_argument("action", choices=["install", "remove", "status"])
+    sc.add_argument("--frequency", choices=["daily", "weekly", "monthly"])
+    sc.add_argument("--time", help="HH:MM local time")
+    sc.add_argument("--weekday", choices=sorted(schedule.WEEKDAYS))
+    sc.add_argument("--dry-run", action="store_true")
+    sc.set_defaults(fn=do_schedule)
+    dc = sub.add_parser("doc", help="render a ledger document; all arguments pass through to render_ledger_doc.py")
+    dc.add_argument("rest", nargs=argparse.REMAINDER)
+    dc.set_defaults(fn=do_doc)
     ri = sub.add_parser("reinit", help="fresh onboarding; the previous store is kept with a timestamp")
     ri.add_argument("--yes", action="store_true")
     ri.add_argument("--set", action="append")
     ri.set_defaults(fn=do_reinit)
+    if len(sys.argv) > 1 and sys.argv[1] == "doc":  # everything after `doc` belongs to the renderer, including --list
+        sys.exit(subprocess.run([sys.executable, os.path.join(HERE, "render_ledger_doc.py")] + sys.argv[2:]).returncode)
     a = ap.parse_args()
-    a.fn(a)
+    rc = a.fn(a)
+    if isinstance(rc, int) and rc:
+        sys.exit(rc)
 
 
 if __name__ == "__main__":

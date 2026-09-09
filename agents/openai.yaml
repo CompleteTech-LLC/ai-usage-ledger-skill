@@ -1,7 +1,7 @@
 interface:
   display_name: "AI Usage Ledger Skill"
   short_description: "Compile, price and attribute local AI agent usage"
-  default_prompt: "Use $ai-usage-ledger: on first use ask me for branding, theme and storage backend (sqlite/json/csv) and run the onboarding; then detect every AI coding-agent log on this machine and its hosts, append new calls to the ledger store, price them at list API rates by account, and render the branded dashboard and study package."
+  default_prompt: "Use $ai-usage-ledger: on first use ask me for branding, theme, storage backend (sqlite/json/csv), whether to refresh on a schedule and whether to keep an anonymised copy, then run the onboarding; then detect every AI coding-agent log on this machine and its hosts, append new calls to the ledger store, price them at list API rates by account, render the branded dashboard and study package, and offer the ledger documents (statement, memo, brief) from the catalog."
 
 policy:
   allow_implicit_invocation: false

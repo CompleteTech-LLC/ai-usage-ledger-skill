@@ -106,7 +106,8 @@ def validate_mermaid(skip: bool) -> None:
 
 
 def smoke_pipeline() -> None:
-    for script in ("run_pipeline.py", "compile_ai_logs.py", "analyze_events.py", "build_report.py", "ledger.py", "ledger_store.py", "detect_hosts.py"):
+    for script in ("run_pipeline.py", "compile_ai_logs.py", "analyze_events.py", "build_report.py", "ledger.py", "ledger_store.py", "detect_hosts.py",
+                   "anonymize.py", "schedule.py", "render_ledger_doc.py", "render_pdf.py"):
         run([sys.executable, str(ROOT / "scripts" / script), "--help"])
     print("pipeline smoke ok")
 

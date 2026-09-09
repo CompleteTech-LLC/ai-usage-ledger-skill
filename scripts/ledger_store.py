@@ -422,6 +422,10 @@ def export_jsonl(store, out_dir, host_label="store"):
 def export_table(store, table, fmt, out_path):
     """Dump one table as json (array), jsonl or csv."""
     it = store.iter_events() if table == "events" else store.iter_table(table)
+    return export_rows(it, table, fmt, out_path)
+
+
+def export_rows(it, table, fmt, out_path):
     cols = {"events": EVENT_COLUMNS, "sessions": SESSION_COLUMNS, "prompts": PROMPT_COLUMNS}[table]
     n = 0
     if fmt == "csv":

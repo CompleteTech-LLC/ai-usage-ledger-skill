@@ -1,8 +1,8 @@
 ---
 name: ai-usage-ledger
 description: >-
-  Compile every locally recorded AI coding-agent model call (Claude Code, Codex CLI/Desktop, GitHub Copilot CLI, Gemini CLI, opencode, OpenClaw, Cline/Roo/Kilo, aider, Kimi Code, Mistral Vibe, Continue, pi, Codebuff and any JSON-logging tool) across all drives, user profiles, WSL distros and SSH hosts into one append-only, de-duplicated ledger stored as SQLite, JSON or CSV; price it at list API rates; split it by subscription account and billing plan; validate it against the tools' own counters; and render a branded light/dark dashboard plus a research-grade study package. Onboards once (branding, storage backend, hosts, accounts auto-detected per OS), remembers the preferences, and refreshes with one command. Use when asked to "find all my AI logs", "how many tokens did I use", "what would this have cost on the API", "compare my subscriptions", "usage by account", "cache savings", "set up my usage ledger", or to refresh an existing ledger.
-version: 1.3.0
+  Compile every locally recorded AI coding-agent model call (Claude Code, Codex CLI/Desktop, GitHub Copilot CLI, Gemini CLI, opencode, OpenClaw, Cline/Roo/Kilo, aider, Kimi Code, Mistral Vibe, Continue, pi, Codebuff and any JSON-logging tool) across all drives, user profiles, WSL distros and SSH hosts into one append-only, de-duplicated ledger stored as SQLite, JSON or CSV; price it at list API rates; split it by subscription account and billing plan; validate it against the tools' own counters; and render a branded light/dark dashboard plus a research-grade study package. Onboards once (branding, theme, storage backend, scheduled refresh, anonymised publication copy; hosts and accounts auto-detected per OS), remembers the preferences, refreshes with one command or on a schedule, renders fifteen ledger documents (statements, memos, briefs, billing evidence) as Markdown, HTML, PDF and DOCX, and can anonymise everything for publication. Use when asked to "find all my AI logs", "how many tokens did I use", "what would this have cost on the API", "compare my subscriptions", "usage by account", "cache savings", "set up my usage ledger", "monthly usage statement", "publish my usage anonymously", or to refresh an existing ledger.
+version: 1.4.0
 metadata:
   openclaw:
     skillKey: ai-usage-ledger
@@ -39,11 +39,11 @@ metadata:
 
 | Step | Action |
 |---|---|
-| 1 | First use only: onboard. On a terminal run `python3 scripts/ledger.py init` and answer the prompts. From an agent harness, ask the operator the same questions in chat (brand name, eyebrow, tagline, contact, logo, accent colour, theme, storage backend, working directory, timezone, whether to include other profiles / drives / WSL), then run `python3 scripts/ledger.py init --yes --set key=value ...`. Preferences persist in `~/.ai-usage-ledger/config.json` and in the store; later runs never ask again. |
+| 1 | First use only: onboard. On a terminal run `python3 scripts/ledger.py init` and answer the prompts. From an agent harness, ask the operator the same questions in chat (brand name, eyebrow, tagline, contact, logo, accent colour, theme, storage backend, working directory, timezone, whether to include other profiles / drives / WSL, whether to build an anonymised copy on every run, and whether to refresh on a schedule: none / daily / weekly / monthly, time, weekday, install now), then run `python3 scripts/ledger.py init --yes --set key=value ...`. Preferences persist in `~/.ai-usage-ledger/config.json` and in the store; later runs never ask again. Installing the schedule changes the operator's Task Scheduler or crontab, so confirm it explicitly before passing `schedule.install=y`. |
 | 2 | Onboarding auto-detects hosts and roots for this OS (`scripts/detect_hosts.py`: Windows, macOS, Linux, every WSL distro, other user profiles and drives, VS Code-family global storage, `CODEX_HOME`-style overrides) and drafts `accounts.json` from credential claims. Review the draft: labels, prices, and the `why` on each rule. Add SSH hosts when prompted or in `config.json` `extra_hosts`. Record what could not be read and why. |
 | 3 | Run `python3 scripts/ledger.py run`. It rescans, appends only new calls to the store (stable ids; duplicates are skipped), rebuilds the tables, dashboard and study package, and records the run. Repeat as often as wanted. |
 | 4 | Validate per the checks below; fix a rule and run `python3 scripts/ledger.py run --no-scan` to rebuild from the store without rescanning. |
-| 5 | Deliver the dashboard, the study package and `all_events.csv` (or `ledger.py export`), with exclusions and low-confidence rules stated. |
+| 5 | Deliver the dashboard, the study package and `all_events.csv` (or `ledger.py export`), with exclusions and low-confidence rules stated. For a statement, memo or brief, pick a template from `references/ledger-document-catalog.md` and render it with `python3 scripts/ledger.py doc --template <id> --var prepared_for=... [--pdf --docx]`. For anything leaving the organisation, use the anonymised copy (`ledger.py run --anonymize`, then `doc --anonymize`) and check the outputs for names before publishing. |
 | 6 | To start over (new brand, different backend, changed hosts) run `python3 scripts/ledger.py reinit`; the previous store is kept beside the new one with a timestamp. The manual route (`run_pipeline.py` with a hand-written manifest) still works for one-off or unattended use. |
 
 | Required Fact | Examples |
@@ -64,6 +64,8 @@ metadata:
 | Magnitude | Median Codex context per call 100 to 200K tokens; hundreds of billions per month on one subscription is a replay bug. |
 | Fixtures | `python3 tests/make_fixtures.py` prints `ALL OK` and `python3 tests/test_store.py` prints `STORE OK` before the first real run. |
 | Append-only | A second `ledger.py run` straight after the first reports `added {"events": 0, ...}`; a host that adds events on every run without new activity is being counted twice (check `detect_hosts.py` notes for same-volume profiles). |
+| Anonymised outputs | Before publishing, grep the anonymised `compiled/` tree and any rendered document for host names, user names, e-mails and directory names from the private map (`~/.ai-usage-ledger/anonymize-map.json`); the test suite does this on fixtures, the operator does it on real data. |
+| Documents | Every ledger placeholder in a rendered document is filled; a leftover `{name}` is either a `--var` the template needs (recipient, contract, correction values) or a bug. |
 
 ## Quality Rules
 
@@ -85,25 +87,31 @@ metadata:
 | `references/discovery.md` | Where logs and credentials live, sweep commands, reading accounts safely, defensible attribution rules. |
 | `references/pitfalls.md` | Sixteen ways the numbers go wrong. |
 | `references/harnesses.md` | Install locations and notes for Claude Code, Codex, Cursor, SSH, WSL and macOS. |
+| `references/ledger-document-catalog.md` | Fifteen ledger documents (executive summary, monthly statement, quarterly review, account statement, subscription memo and renewal recommendation, cache brief, budget forecast, project allocation, billing evidence, model mix, tool adoption, host inventory, data-quality note, correction notice) with their placeholders. |
+| `references/template-index.json` | Machine-readable index of the catalog used by the renderer. |
 | `templates/` | Manifest, pricing sheet, account and report-config examples. |
 | `examples/` | A workstation manifest and the CompleteTech brand preset. |
 | `scripts/ledger.py` | Daily entry point: `init` (onboarding), `run` (scan, append, rebuild), `status`, `export`, `reinit`. |
 | `scripts/detect_hosts.py` | OS-aware discovery of harness roots, profiles, drives, WSL distros and credential claims; prints or emits manifest hosts and an accounts draft. |
 | `scripts/ledger_store.py` | Append-only store with SQLite, JSON (JSONL) and CSV backends, stable event ids, prefs and run history, exports. |
 | `scripts/run_pipeline.py` | One command: scan every host, merge, analyse, render, zip (used by `ledger.py`, also usable alone). |
+| `scripts/render_ledger_doc.py` | `--list` the catalog or `--template <id>` to fill it from the ledger: Markdown and themed HTML always, `--pdf`, `--docx`, `--png` when the optional libraries are installed; `--anonymize` reads the anonymised copy. |
+| `scripts/render_pdf.py` | Branded Markdown to PDF / DOCX (letterhead band, logo, accent tables, footer). |
+| `scripts/anonymize.py` | Salted pseudonyms for hosts, sessions, projects and accounts; paths, prompts and identities removed; private map kept beside the store. |
+| `scripts/schedule.py` | Task Scheduler (Windows) or crontab (Linux, WSL, macOS) entry that runs `ledger.py run` daily, weekly or monthly through a wrapper that logs to `~/.ai-usage-ledger/logs/run.log`. |
 | `scripts/compile_ai_logs.py` | `scan` (14 parsers plus a generic sniffer) and `report` (merge, price, attribute). |
 | `scripts/analyze_events.py` | Distributions, time of day, concentration, validation, sensitivity. |
 | `scripts/build_dashboard.py`, `scripts/build_report.py` | Branded dashboard and study package. |
 | `tests/make_fixtures.py` | Synthetic logs and totals check for every parser. |
-| `tests/test_store.py` | Every backend ingests once and skips the repeat; non-interactive onboarding; two `ledger.py run`s end with zero new rows. |
+| `tests/test_store.py` | Every backend ingests once and skips the repeat; non-interactive onboarding; two `ledger.py run`s end with zero new rows; the anonymised copy holds no fixture host, path or e-mail; schedule dry-runs; all fifteen documents render with no ledger placeholder left. |
 
 ## Runtime Permissions
 
 | Capability | Boundary |
 |---|---|
 | Files read | Agent transcripts, tool databases and credential files under the user's own profiles and hosts named in the manifest; bundled templates, references and `assets/logo.png`. |
-| Files written | `~/.ai-usage-ledger/` (or `$AI_USAGE_LEDGER_HOME`): `config.json`, the store, generated `manifest.json`, `accounts.json`, `pricing.json`, `report_config.json`; `scans/`, `compiled/`, `store-export/` and `reports/` under the chosen `workdir`; `tests/fixtures`, `tests/out` during the test suites. |
-| Local commands | `python3` for the scripts; `wsl.exe -l -q` to list distros during detection; `wsl.exe`, `ssh` and `scp` only for hosts in the manifest. |
+| Files written | `~/.ai-usage-ledger/` (or `$AI_USAGE_LEDGER_HOME`): `config.json`, the store, generated `manifest.json`, `accounts.json`, `pricing.json`, `report_config.json`, `anonymize-map.json`, `run-ledger.cmd|sh`, `logs/`; `scans/`, `compiled/`, `store-export/`, `reports/`, `anonymized/` and `documents/` under the chosen `workdir`; `tests/fixtures`, `tests/out` during the test suites. |
+| Local commands | `python3` for the scripts; `wsl.exe -l -q` to list distros during detection; `wsl.exe`, `ssh` and `scp` only for hosts in the manifest; `schtasks` or `crontab` only when the operator asks for a scheduled refresh (`schedule install|remove`), never silently. |
 | Not required | Outbound network access (pricing pages are fetched by the operator, not the scripts), credential use, persistence, privilege escalation, destructive file operations, background services. |
 
 ## Renderer
@@ -118,6 +126,11 @@ metadata:
 | What is configured and stored | `python3 scripts/ledger.py status` |
 | Export the store | `python3 scripts/ledger.py export --table events --format csv --out events.csv` (`json`, `jsonl`; tables `events`, `sessions`, `prompts`) |
 | Start over | `python3 scripts/ledger.py reinit` |
+| Anonymised copy for publication | `python3 scripts/ledger.py run --anonymize` (or `--set anonymize.on_every_run=y` at onboarding); outputs under `<workdir>/anonymized/`; `ledger.py export --anonymize` for tables |
+| List ledger documents | `python3 scripts/ledger.py doc --list [--stage finance] [--type memo]` |
+| Render a document | `python3 scripts/ledger.py doc --template monthly-usage-statement --var prepared_for="Finance" --var month=2026-08 --pdf --docx` |
+| Render from the anonymised copy | `python3 scripts/ledger.py doc --template executive-summary --anonymize --pdf` |
+| Scheduled refresh | `python3 scripts/ledger.py schedule install --frequency daily --time 03:00` · `schedule status` · `schedule remove` (`--dry-run` prints the command only) |
 | Just look at what is on this machine | `python3 scripts/detect_hosts.py --all-profiles` (`--json` for the manifest shape) |
 | Manual pipeline (no store) | `python3 scripts/run_pipeline.py --manifest manifest.json [--only report,analyze,build] [--hosts a,b]` |
 | Parser and store self-tests | `python3 tests/make_fixtures.py` · `python3 tests/test_store.py` |
@@ -130,6 +143,8 @@ metadata:
 | `store.kind` | `sqlite` (one file, indexed), `json` (JSONL files plus id index), `csv` (CSV files plus id index). |
 | `workdir`, `timezone` | Paths and IANA zone. |
 | `detect.all_profiles`, `detect.wsl` | `y` / `n`. |
+| `anonymize.on_every_run` | `y` / `n`: also build `<workdir>/anonymized/` on every run. |
+| `schedule.frequency`, `schedule.time`, `schedule.weekday`, `schedule.install` | `none` / `daily` / `weekly` / `monthly`; `HH:MM`; `mon`..`sun`; `y` installs the task or cron entry during onboarding (ask first). |
 
 | Output | Path |
 |---|---|
@@ -157,6 +172,35 @@ metadata:
 | Sessions and prompts | Same scheme keyed on tool, host, session and file (sessions) or timestamp, session and text (prompts). |
 | Prefs and runs | Every preference is mirrored into the store; each `run` records what it added, skipped and produced. |
 | Reinit | Moves the store aside as `<store>.before-reinit-<stamp>` and onboards again; nothing is deleted. |
+
+## Anonymisation
+
+| Element | Rule |
+|---|---|
+| Replaced | Host names to `host-<6 hex>`, session and request ids to 12-hex digests, working directories to `project-<8 hex>`, account keys to `<tool>:acct-<6 hex>`, any path, URL or e-mail in a free-text field to `path-`/`user-` tokens. |
+| Removed | Source file paths, prompts, account labels, e-mails, organisations, evidence strings, host descriptions and the primary-host note in the report config. |
+| Kept | Tool, model, plan type, timestamps, token counts, costs, kind, entrypoint kind, version, effort: the study itself. |
+| Stability | Pseudonyms are SHA-256 of a private salt generated at onboarding, so reruns agree and outsiders cannot reverse them; the real-to-pseudonym map stays in `~/.ai-usage-ledger/anonymize-map.json`. |
+| Branding | The publisher's own branding stays on anonymised outputs; change it at onboarding if the publisher differs from the operator. |
+
+## Ledger Documents
+
+| Element | Rule |
+|---|---|
+| Source of figures | `compiled/summary.json` and `analysis.json` of the configured ledger (or `--compiled <dir>`); nothing is typed in by hand. |
+| Recipient facts | `--var prepared_for=`, `reference=`, `notes=`, `contract_id=`, `billing_period=`, correction values. |
+| Scopes | `--var month=YYYY-MM`, `--var account=<key>`, `--var project=<directory substring>`; defaults are the latest month, the largest account, the largest project. |
+| Formats | Markdown and themed HTML always; PDF (reportlab) and DOCX (python-docx) with `--pdf` / `--docx`; PNG preview with `--png`. |
+| Wording | Every document states that figures are API-equivalents at list price and not invoices; the billing evidence template feeds `agentic-invoice-skill`, it does not replace it. |
+
+## Scheduling
+
+| Element | Rule |
+|---|---|
+| Windows | `schtasks` task "AI Usage Ledger" running `~/.ai-usage-ledger/run-ledger.cmd` daily, weekly (`--weekday`) or monthly (day 1) at `--time`. |
+| Linux, WSL, macOS | One crontab line tagged `# ai-usage-ledger` running `run-ledger.sh`; macOS may need Full Disk Access for cron. |
+| Logging | Each run appends to `~/.ai-usage-ledger/logs/run.log`; `ledger.py status` shows the entry and the last log lines. |
+| Consent | Onboarding asks whether to install; an agent passes `--set schedule.install=y` only after the operator has agreed in chat. `--dry-run` prints the exact command. |
 
 ## Definitions
 
