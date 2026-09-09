@@ -330,7 +330,8 @@ __BRAND_FOOTER__
 (function(){
   var KEY="ledger-theme", root=document.documentElement;
   function apply(v){ if(v==="light"||v==="dark"){root.setAttribute("data-theme",v);}else{root.removeAttribute("data-theme");} document.querySelectorAll(".themebar button").forEach(function(b){b.classList.toggle("on", b.dataset.t===(v||"system"));}); }
-  var saved=null; try{saved=localStorage.getItem(KEY);}catch(e){}
+  var DEF="__THEME_DEFAULT__", saved=null; try{saved=localStorage.getItem(KEY);}catch(e){}
+  if(!saved && (DEF==="light"||DEF==="dark")) saved=DEF;
   apply(saved);
   document.addEventListener("click",function(ev){ var b=ev.target.closest(".themebar button"); if(!b) return; var v=b.dataset.t; try{ if(v==="system") localStorage.removeItem(KEY); else localStorage.setItem(KEY,v);}catch(e){} apply(v==="system"?null:v); });
 })();
@@ -646,6 +647,7 @@ function niceStep(x){ const p = Math.pow(10, Math.floor(Math.log10(x))); const f
 html = html.replace("__DATA__", payload)
 _style, _header, _footer, _link = brand_blocks(CFG, os.path.dirname(os.path.abspath(sys.argv[3])) if len(sys.argv) > 3 else None)
 html = html.replace("__BRAND_STYLE__", _link + _style).replace("__BRAND_HEADER__", _header).replace("__BRAND_FOOTER__", _footer).replace("__THEMEBAR__", THEMEBAR_HTML)
+html = html.replace("__THEME_DEFAULT__", str(CFG.get("theme_default") or "system"))
 os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
 open(dst, "w", encoding="utf-8").write(html)
 print("wrote", dst, len(html) // 1024, "KB")

@@ -7,8 +7,12 @@ Runnable example inputs for this skill.
 
 Rendered demonstration artifacts live under `assets/examples/` (`example.md`, `example.html`, `example.png`) so README previews and packaged outputs stay close to the visual assets they reference. They were produced from synthetic fixtures (`tests/make_fixtures.py`), not from any real account.
 
-Copy the two files to a working directory, replace the `<you>` placeholders, add `pricing.json` and `accounts.json` from `templates/`, then:
+Most people do not need these files: `python3 scripts/ledger.py init` detects the hosts and writes the manifest, accounts draft, pricing sheet and report config into `~/.ai-usage-ledger/`, and `python3 scripts/ledger.py run` refreshes the ledger from then on. `examples/config.example.json` shows what the saved preferences look like.
+
+For a manual, store-less run copy the two files to a working directory, replace the `<you>` placeholders, add `pricing.json` and `accounts.json` from `templates/`, then:
 
 ```bash
 python3 scripts/run_pipeline.py --manifest manifest.workstation.json
 ```
+
+`manifest.fixtures.json` and `accounts.fixtures.json` drive the synthetic example in `assets/examples/`.

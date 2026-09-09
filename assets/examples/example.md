@@ -56,16 +56,16 @@ Hosts: **fixture** = fixture.
 
 | Host | Tool | Root scanned | Calls found | Prompts | Tool's thread count | Tool's token total |
 |---|---|---|---:|---:|---:|---:|
-| fixture | Claude Code | `C:\Users\timot\Documents\projects\logging\skill\ai-usage-ledger\tests\fixtures\claude` | 1 | 0 | – | – |
-| fixture | Codex | `C:\Users\timot\Documents\projects\logging\skill\ai-usage-ledger\tests\fixtures\codex` | 3 | 0 | – | – |
-| fixture | pi | `C:\Users\timot\Documents\projects\logging\skill\ai-usage-ledger\tests\fixtures\pi` | 1 | 0 | – | – |
-| fixture | gemini-cli | `C:\Users\timot\Documents\projects\logging\skill\ai-usage-ledger\tests\fixtures\gemini` | 1 | 0 | – | – |
-| fixture | cline | `C:\Users\timot\Documents\projects\logging\skill\ai-usage-ledger\tests\fixtures\cline` | 1 | 0 | – | – |
-| fixture | aider | `C:\Users\timot\Documents\projects\logging\skill\ai-usage-ledger\tests\fixtures\aider` | 2 | 0 | – | – |
-| fixture | kimi | `C:\Users\timot\Documents\projects\logging\skill\ai-usage-ledger\tests\fixtures\kimi` | 1 | 0 | – | – |
-| fixture | mistral-vibe | `C:\Users\timot\Documents\projects\logging\skill\ai-usage-ledger\tests\fixtures\vibe` | 1 | 0 | – | – |
-| fixture | continue | `C:\Users\timot\Documents\projects\logging\skill\ai-usage-ledger\tests\fixtures\continue` | 1 | 0 | – | – |
-| fixture | codebuff | `C:\Users\timot\Documents\projects\logging\skill\ai-usage-ledger\tests\fixtures\generic` | 1 | 0 | – | – |
+| fixture | Claude Code | `C:\Users\timot\AppData\Local\Temp\claude\C--Users-timot-Documents-projects-logging\a746dd00-2091-453e-bd1c-14a158d85c45\scratchpad\repo\ai-usage-ledger-skill\tests\fixtures\claude` | 1 | 0 | – | – |
+| fixture | Codex | `C:\Users\timot\AppData\Local\Temp\claude\C--Users-timot-Documents-projects-logging\a746dd00-2091-453e-bd1c-14a158d85c45\scratchpad\repo\ai-usage-ledger-skill\tests\fixtures\codex` | 3 | 0 | – | – |
+| fixture | pi | `C:\Users\timot\AppData\Local\Temp\claude\C--Users-timot-Documents-projects-logging\a746dd00-2091-453e-bd1c-14a158d85c45\scratchpad\repo\ai-usage-ledger-skill\tests\fixtures\pi` | 1 | 0 | – | – |
+| fixture | gemini-cli | `C:\Users\timot\AppData\Local\Temp\claude\C--Users-timot-Documents-projects-logging\a746dd00-2091-453e-bd1c-14a158d85c45\scratchpad\repo\ai-usage-ledger-skill\tests\fixtures\gemini` | 1 | 0 | – | – |
+| fixture | cline | `C:\Users\timot\AppData\Local\Temp\claude\C--Users-timot-Documents-projects-logging\a746dd00-2091-453e-bd1c-14a158d85c45\scratchpad\repo\ai-usage-ledger-skill\tests\fixtures\cline` | 1 | 0 | – | – |
+| fixture | aider | `C:\Users\timot\AppData\Local\Temp\claude\C--Users-timot-Documents-projects-logging\a746dd00-2091-453e-bd1c-14a158d85c45\scratchpad\repo\ai-usage-ledger-skill\tests\fixtures\aider` | 2 | 0 | – | – |
+| fixture | kimi | `C:\Users\timot\AppData\Local\Temp\claude\C--Users-timot-Documents-projects-logging\a746dd00-2091-453e-bd1c-14a158d85c45\scratchpad\repo\ai-usage-ledger-skill\tests\fixtures\kimi` | 1 | 0 | – | – |
+| fixture | mistral-vibe | `C:\Users\timot\AppData\Local\Temp\claude\C--Users-timot-Documents-projects-logging\a746dd00-2091-453e-bd1c-14a158d85c45\scratchpad\repo\ai-usage-ledger-skill\tests\fixtures\vibe` | 1 | 0 | – | – |
+| fixture | continue | `C:\Users\timot\AppData\Local\Temp\claude\C--Users-timot-Documents-projects-logging\a746dd00-2091-453e-bd1c-14a158d85c45\scratchpad\repo\ai-usage-ledger-skill\tests\fixtures\continue` | 1 | 0 | – | – |
+| fixture | codebuff | `C:\Users\timot\AppData\Local\Temp\claude\C--Users-timot-Documents-projects-logging\a746dd00-2091-453e-bd1c-14a158d85c45\scratchpad\repo\ai-usage-ledger-skill\tests\fixtures\generic` | 1 | 0 | – | – |
 
 Scan statistics: **fixture** 11 files, 0.0 GB, 39 lines, 0 JSON errors, 2 replayed Codex token events skipped, 1 duplicates skipped, 0.0s.
 
@@ -259,7 +259,7 @@ Busiest hours: 05:00 (3), 06:00 (1), 00:00 (0), 01:00 (0), 02:00 (0). Quietest: 
 
 | Tool | Host | Thread | Working directory (tail) | Model | Calls | Hours | Tokens | Output | API-eq. |
 |---|---|---|---|---|---:|---:|---:|---:|---:|
-| aider | fixture | `repo@2026-04-` | \skill\ai-usage-ledger\tests\fixtures\aider\repo | gpt-5.5 | 2 | 0 | 39.38K | 147 | $0.20 |
+| aider | fixture | `repo@2026-04-` | \ai-usage-ledger-skill\tests\fixtures\aider\repo | gpt-5.5 | 2 | 0 | 39.38K | 147 | $0.20 |
 | mistral-vibe | fixture | `v1` | /w | devstral-2 | 1 | 0 | 5.30K | 300 | $0.00 |
 | Codex | fixture | `rollout-2026-` | /w | gpt-5.5 | 2 | 0 | 2.20K | 200 | $0.01 |
 | cline | fixture | `t1` |  | claude-sonnet-5 | 1 | 0 | 1.66K | 60 | $0.00 |
@@ -277,7 +277,7 @@ Busiest hours: 05:00 (3), 06:00 (1), 00:00 (0), 01:00 (0), 02:00 (0). Quietest: 
 
 | Tool | Directory | Sessions | Calls | Tokens | API-eq. |
 |---|---|---:|---:|---:|---:|
-| aider | `C:\Users\timot\Documents\projects\logging\skill\ai-usage-ledger\tests\fixtures\aider\repo` | 1 | 2 | 39.38K | $0.20 |
+| aider | `C:\Users\timot\AppData\Local\Temp\claude\C--Users-timot-Documents-projects-logging\a746dd00-2091-453e-bd1c-14a158d85c45\scratchpad\repo\ai-usage-ledger-skill\tests\fixtures\aider\repo` | 1 | 2 | 39.38K | $0.20 |
 | mistral-vibe | `/w` | 1 | 1 | 5.30K | $0.00 |
 | Codex | `/w` | 2 | 3 | 2.43K | $0.01 |
 | cline | `?` | 1 | 1 | 1.66K | $0.00 |
@@ -300,7 +300,7 @@ Busiest hours: 05:00 (3), 06:00 (1), 00:00 (0), 01:00 (0), 02:00 (0). Quietest: 
 | Claude Code | cli | 1 | 1.26K | $0.00 |
 | kimi | kimi | 1 | 1.09K | $0.00 |
 | gemini-cli | gemini-cli | 1 | 560 | $0.00 |
-| pi | openclaw:C:\Users\timot\Documents\projects\logging\skill\ai-usage-ledger\tests\fixtures\pi | 1 | 430 | $0.00 |
+| pi | openclaw:C:\Users\timot\AppData\Local\Temp\claude\C--Users-timot-Documents-projects-logging\a746dd00-2091-453e-bd1c-14a158d85c45\scratchpad\repo\ai-usage-ledger-skill\tests\fixtures\pi | 1 | 430 | $0.00 |
 | codebuff | codebuff | 1 | 425 | $0.00 |
 
 | Tool | Effort setting | Calls | Output | Reasoning share | API-eq. |
@@ -337,10 +337,10 @@ python scripts/run_pipeline.py --manifest manifest.json --only report,analyze,bu
 |---|---|
 | compile_ai_logs.py | `e22cd6d26f44d77324354da3534b948f4a7a30c25fe7f1018343ce92e2a87066` |
 | analyze_events.py | `8afe1edae8d10bbe4a64e07ba78168ad8b90464bfed638041581b1f565a18853` |
-| build_report.py | `195fbde30576cf5bbacbaef87dffc726c9f345c75e75be7ea1bc0708f1c71fd4` |
+| build_report.py | `286ba286628b992bdf95a6daa0f0a91e89ddc7a9c0b8d0dabd8aa7dcc277dadf` |
 | pricing.json | `d7690e151fffd3cd506def4d2346cccbbf80ddf19fcdf6d9dfddcf0afcead1fc` |
-| summary.json | `fe6589ef8bb08a0b620493d1748786517c339c73bc654c3765eff2cff59d3593` |
-| analysis.json | `0d4121144b77434525fa8b36bf5b61e3ad13add44f2dcb3c974db872c497e3af` |
+| summary.json | `3ee75c53aeb7fb3a549cd1f3446d438f81fcceddf066368fbd4cfee5dd213bd5` |
+| analysis.json | `e21fd93e7e98d885e74623ceb102b4ebcd1aeb87e9634a4c366fed28640ce88d` |
 
 The event-level dataset (`compiled/all_events.csv`, 13 rows, one per model call with every token class, the pricing row applied, the account assigned and the source file path) is the primary artefact; every table above is an aggregation of it.
 
