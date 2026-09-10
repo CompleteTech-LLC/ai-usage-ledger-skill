@@ -313,7 +313,7 @@ API-equivalent at list price: {project_api_usd}. This is a reference value for t
 
 ## Provenance
 
-Compiled from local agent logs on {hosts}, de-duplicated, priced with `pricing.json` as of {snapshot_date}. The event log (`all_events.csv`) and the study package are available on request.
+Compiled from local agent logs on {hosts}, de-duplicated, priced with `pricing.json` as of {snapshot_date}. The event log (`all_events.csv`) and the study package are available on request. Both name the hosts, working directories and accounts behind every call, not only the client's project: review them or supply the anonymised copy (see the package's `SENSITIVITY.md` and `ledger.py publish-check`) before releasing either to a client.
 
 {notes}
 

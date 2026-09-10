@@ -1,5 +1,5 @@
 {
-  "_comment": "Account registry and attribution rules. Rules are evaluated in order; the first match wins. Fill the registry from each host's credential files (see references/discovery.md for how to read the ChatGPT account id and plan from ~/.codex/auth.json and the Claude account from ~/.claude.json) and write one rule per piece of evidence. Keys are free-form but prefix with the provider (codex:, claude:) so the dashboard can colour them.",
+  "_comment": "Account registry and attribution rules. Rules are evaluated in order; the first match wins. Fill the registry from each host's credential files (see references/discovery.md for how to read the ChatGPT account id and plan from ~/.codex/auth.json and the Claude account from ~/.claude.json) and write one rule per piece of evidence. Keys are free-form but prefix with the provider (codex:, claude:) so the dashboard can colour them. Do not add a catch-all rule (an empty or tool-only \"when\" that names a real account): a call that matches no rule is reported as `unattributed` with billing unknown, and the dashboard and study show how many, so unmatched usage is never silently charged to an account.",
   "accounts": {
     "codex:<account-id-prefix>": {
       "provider": "openai",
@@ -28,9 +28,7 @@
      "why": "the call itself is stamped usage-based (exact); which org owned it is inferred"},
     {"when": {"tool": "codex", "host": "<host name>"}, "account": "codex:<account-id-prefix>", "billing": "subscription", "confidence": "medium", "why": "that host's ~/.codex/auth.json; assumed for its whole history"},
     {"when": {"tool": "codex", "host": "<host name>", "cwd_contains": "<project dir fragment>", "date_from": "YYYY-MM-DD"}, "account": "codex:<other-id>", "billing": "subscription", "confidence": "medium", "why": "a saved auth switch for that project from that date"},
-    {"when": {"tool": "codex"}, "account": "codex:<account-id-prefix>", "billing": "subscription", "confidence": "low", "why": "fallback"},
     {"when": {"tool": "claude-code", "host": "<host name>"}, "account": "claude:<label>", "billing": "subscription", "confidence": "high", "why": ".claude.json oauthAccount on that host"},
-    {"when": {"tool": "claude-code"}, "account": "claude:<label>", "billing": "subscription", "confidence": "low", "why": "fallback"},
     {"when": {"tool": "openclaw"}, "account": "openclaw:api-keys", "billing": "usage-based", "confidence": "high", "why": "gateway calls providers directly"},
     {"when": {"tool": "opencode"}, "account": "opencode:openrouter", "billing": "usage-based", "confidence": "high", "why": "opencode logs its own cost"},
     {"when": {"tool": "copilot-cli"}, "account": "copilot", "billing": "subscription", "confidence": "high", "why": "Copilot CLI"}

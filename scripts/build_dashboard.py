@@ -10,7 +10,10 @@ import html as _html  # noqa: E402
 
 src = sys.argv[1] if len(sys.argv) > 1 else "compiled/summary.json"
 dst = sys.argv[2] if len(sys.argv) > 2 else "compiled/agent-ledger.html"
-CFG = json.load(open(sys.argv[3], encoding="utf-8")) if len(sys.argv) > 3 and os.path.isfile(sys.argv[3]) else {}
+CFG = {}
+if len(sys.argv) > 3 and os.path.isfile(sys.argv[3]):
+    safety.refuse_if_shared(sys.argv[3], "report config")  # it decides branding, links and notes on the page: refuse a shared file
+    CFG = json.load(open(sys.argv[3], encoding="utf-8"))
 S = json.load(open(src, encoding="utf-8"))
 A = {}
 ap = os.path.join(os.path.dirname(src) or ".", "analysis.json")
@@ -28,7 +31,22 @@ for host, sp in _stats_paths.items():
                            "models": {m: sum(u.get(k, 0) for k in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens")) for m, u in mu.items()}}
         except Exception:
             pass
-STUDY_URL = os.environ.get("STUDY_URL") or CFG.get("study_url") or ""
+
+
+def _study_url():
+    """The 'Read the study' link may only be an absolute https URL (safety.validate_study_url); a javascript:, data:,
+    protocol-relative or http: value is dropped with a warning and never reaches the page."""
+    for what, value in (("STUDY_URL", os.environ.get("STUDY_URL")), ("study_url in the report config", CFG.get("study_url"))):
+        if not value:
+            continue
+        try:
+            return safety.validate_study_url(value)
+        except safety.UnsafeValue as ex:
+            sys.stderr.write("warning: %s dropped, not rendered: %s\n" % (what, ex))
+    return ""
+
+
+STUDY_URL = _study_url()
 
 # trim what the page needs
 data = {
@@ -367,7 +385,13 @@ function hideTip(){ tip.style.display="none"; }
 const days = D.by_day_tool.map(r=>r.date).filter(d=>d && d!=="?").sort();
 document.getElementById("range").textContent = `${days[0]} → ${days[days.length-1]} · ${D.events.toLocaleString()} calls · generated ${D.generated.slice(0,16).replace("T"," ")} UTC`;
 const hosts = [...new Set(D.by_tool_host.map(r=>r.host))];
-document.getElementById("hosts").innerHTML = hosts.map(h=>`<span class="chip">${esc(h)}</span>`).join("") + (D.study_url?` <a class="chip study" href="${esc(D.study_url)}">Read the study →</a>`:"");
+const hostsEl = document.getElementById("hosts");
+hostsEl.innerHTML = hosts.map(h=>`<span class="chip">${esc(h)}</span>`).join("");
+if (D.study_url && /^https:\/\/[^\s/]+/i.test(D.study_url)) {  // validated in Python already; built with DOM APIs so no markup or scheme can be smuggled in
+  const link = document.createElement("a");
+  link.className = "chip study"; link.href = D.study_url; link.rel = "noopener noreferrer"; link.textContent = "Read the study →";
+  hostsEl.appendChild(document.createTextNode(" ")); hostsEl.appendChild(link);
+}
 
 // hero: money
 const T = D.total;
@@ -495,8 +519,11 @@ function niceStep(x){ const p = Math.pow(10, Math.floor(Math.log10(x))); const f
   const toolOf = k => k.startsWith("codex")?"codex":k.startsWith("claude")?"claude-code":k.startsWith("openclaw")?"openclaw":k.startsWith("opencode")?"opencode":k==="copilot"?"copilot-cli":"codex";
   const rows = Object.entries(tot).sort((a,b)=>b[1].api_equivalent_usd-a[1].api_equivalent_usd);
   let t = `<table><tr><th>Account</th><th>Plan</th><th class="n">Months</th><th class="n">Paid</th><th class="n">API-equivalent</th><th class="n">If uncached</th><th class="n">API / sub</th><th class="n">Calls</th><th class="n">Tokens</th></tr>`;
-  rows.forEach(([k,r])=>{ t += `<tr><td><span class="sw" style="background:${col(toolOf(k))}"></span>${esc(r.label)}<div class="mono" style="font-size:11px;color:var(--ink-3)">${esc(k)}</div></td><td>${esc(r.plan)}</td><td class="n">${r.months}</td><td class="n">${moneyFull(r.subscription_usd)}</td><td class="n">${moneyFull(r.api_equivalent_usd)}</td><td class="n">${money(r.api_if_uncached_usd)}</td><td class="n">${r.api_to_sub_ratio!=null? r.api_to_sub_ratio+"×":(r.billing==="unknown"?"unknown":"usage-based")}</td><td class="n">${fmt(r.calls)}</td><td class="n">${compact(r.total)}</td></tr>`; });
-  document.getElementById("accounts").innerHTML = t + "</table>";
+  rows.forEach(([k,r])=>{ const un = k==="unattributed"; t += `<tr><td>${un?"":`<span class="sw" style="background:${col(toolOf(k))}"></span>`}${esc(un?"unattributed":r.label)}<div class="mono" style="font-size:11px;color:var(--ink-3)">${esc(un?"no rule matched":k)}</div></td><td>${esc(un?"unknown":r.plan)}</td><td class="n">${r.months}</td><td class="n">${moneyFull(r.subscription_usd)}</td><td class="n">${moneyFull(r.api_equivalent_usd)}</td><td class="n">${money(r.api_if_uncached_usd)}</td><td class="n">${r.api_to_sub_ratio!=null? r.api_to_sub_ratio+"×":(r.billing==="unknown"?"unknown":"usage-based")}</td><td class="n">${fmt(r.calls)}</td><td class="n">${compact(r.total)}</td></tr>`; });
+  // calls that matched no rule are never folded into a real account: they get their own row and a note
+  const unRow = ((ACC.by_account||[]).find(r=>r.account==="unattributed")) || (tot.unattributed ? {calls: tot.unattributed.calls, total: tot.unattributed.total} : null);
+  const unNote = unRow ? `<p style="font-size:12px;color:var(--ink-2);margin:8px 0 0"><b>Unattributed.</b> ${fmt(unRow.calls)} calls (${compact(unRow.total)} tokens) matched no rule in accounts.json and are listed as <span class="mono">unattributed</span> with billing unknown rather than assigned to an account; add a rule in accounts.json to attribute them.</p>` : "";
+  document.getElementById("accounts").innerHTML = t + "</table>" + unNote;
   // month x account matrix (subscription accounts only)
   const subAccts = rows.filter(([k,r])=>r.subscription_usd>0).map(([k])=>k);
   const months = [...new Set((ACC.subscription_rows||[]).map(r=>r.month))].sort();

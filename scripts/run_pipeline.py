@@ -261,7 +261,11 @@ def main():
     if "build" in steps:
         env = dict(os.environ)
         if M.get("study_url"):
-            env["STUDY_URL"] = M["study_url"]
+            try:  # only an absolute https URL reaches the dashboard; anything else is dropped here and again in build_dashboard
+                env["STUDY_URL"] = safety.validate_study_url(M["study_url"])
+            except safety.UnsafeValue as ex:
+                log("warning: study_url in the manifest dropped, not rendered: %s" % ex)
+                env.pop("STUDY_URL", None)
         dash_cmd = [a.python, os.path.join(HERE, "build_dashboard.py"), os.path.join(compiled, "summary.json"), os.path.join(compiled, "agent-ledger.html")]
         if config:
             dash_cmd.append(config)
@@ -269,6 +273,8 @@ def main():
         cmd = [a.python, os.path.join(HERE, "build_report.py"), "--compiled", compiled, "--scans", scans, "--pricing", pricing, "--out", pkg, "--date", date, "--tz", tz]
         if config:
             cmd += ["--config", config]
+        if M.get("package_paths"):  # off by default: absolute scan roots and the report config name users and directories
+            cmd.append("--package-paths")
         for h in M["hosts"]:
             p = os.path.join(scans, h["name"], "stats-cache.json")
             if os.path.isfile(p):
@@ -276,10 +282,9 @@ def main():
         run(cmd)
         if accounts and os.path.isfile(accounts) and M.get("package_accounts"):  # off by default: it names people and organisations
             shutil.copy(accounts, os.path.join(pkg, "accounts.json"))
-            with open(os.path.join(pkg, "SENSITIVITY.md"), "w", encoding="utf-8") as fh:
-                fh.write("# Sensitivity\n\nThis package includes `accounts.json`, which names accounts (identifiers, plans and possibly e-mail addresses or organisation names) "
-                         "and the credential files they were read from. Treat the package as internal. Run `python3 scripts/ledger.py publish-check <this directory>` "
-                         "before sharing it, or share the anonymised package instead.\n")
+            with open(os.path.join(pkg, "SENSITIVITY.md"), "a", encoding="utf-8") as fh:  # build_report wrote the general notice; add the accounts paragraph
+                fh.write("\n## accounts.json is included\n\nThis package includes `accounts.json` (`package_accounts: true`), which names accounts (identifiers, plans and possibly "
+                         "e-mail addresses or organisation names) and the credential files they were read from. Treat the package as internal.\n")
             import build_report
             build_report.write_sums(pkg)  # the checksum file binds the optional files too
         zpath = pkg + ".zip"

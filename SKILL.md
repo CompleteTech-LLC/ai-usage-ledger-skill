@@ -188,7 +188,7 @@ Relay this table to the operator, in chat or on the terminal, before the first o
 | Event log (primary artefact) | `compiled/all_events.csv` |
 | Aggregates | `compiled/by_*.csv`, `subscription_vs_api*.csv`, `SUMMARY.md`, `summary.json`, `analysis.json` |
 | Dashboard | `compiled/agent-ledger.html` |
-| Study package | `reports/<prefix>_<date>/` (`USAGE_REPORT.md`, `report.html`, `ledger.json`, `pricing.json`, `accounts.json`, `README.md`, `SHA256SUMS`) and `.zip` |
+| Study package | `reports/<prefix>_<date>/` (`USAGE_REPORT.md`, `report.html`, `ledger.json`, `pricing.json`, `accounts.json`, `README.md`, `SENSITIVITY.md`, `SHA256SUMS`) and `.zip` |
 
 ## Branding and Themes
 

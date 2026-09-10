@@ -397,7 +397,8 @@ def draft_accounts(hosts, read_credentials=False, identifiable=False, warn=True)
                               ("kimi", "kimi", "Kimi Code"), ("mistral-vibe", "mistral", "Mistral Vibe"), ("continue", "continue:provider", "Continue provider keys"), ("pi", "pi:provider", "pi provider keys")):
         registry.setdefault(acct, {"provider": "mixed", "label": label, "plan": "usage-based or bundled", "monthly_usd": 0, "evidence": "tool default; edit if a subscription applies"})
         rules.append({"when": {"tool": tool}, "account": acct, "billing": "usage-based", "confidence": "medium", "why": "tool default"})
-    rules.append({"when": {}, "account": "codex:usage-based", "billing": "unknown", "confidence": "low", "why": "fallback"})
+    # no catch-all rule: a call that matches nothing is reported as `unattributed` (billing unknown) by compile_ai_logs.assign_account
+    # rather than silently charged to a real account; the dashboard and study show the count so the operator can add a rule.
     src = ("credential files (identity claims only%s)" % (", identifiable" if identifiable else ", minimised: no e-mails or organisation names")) if read_credentials else "host names only (no credential file was read)"
     return {"_comment": "Drafted by detect_hosts.py from %s. Review labels, prices and rules; first match wins. This file names accounts: it is written owner-only and is not copied into study packages unless package_accounts is true." % src,
             "_sensitivity": "account metadata" if read_credentials else "placeholders",
