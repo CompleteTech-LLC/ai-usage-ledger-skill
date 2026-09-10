@@ -131,10 +131,13 @@ class Archive:
         try:
             from urllib.parse import quote
             db = sqlite3.connect("file:%s?mode=ro" % quote(idx.replace("\\", "/"), safe="/:"), uri=True)
+            kinds = {r[0]: r[1] for r in db.execute("SELECT name, type FROM sqlite_master WHERE name IN ('files', 'runs')")}
             files_cols = {r[1] for r in db.execute("PRAGMA table_info(files)")}
             runs_cols = {r[1] for r in db.execute("PRAGMA table_info(runs)")}
             db.close()
         except sqlite3.Error:
+            return False
+        if kinds.get("files") != "table" or kinds.get("runs") != "table":  # a view with our columns is not our index
             return False
         if not {"host", "path", "rel", "size", "mtime", "sha256", "archived_at", "versions"} <= files_cols:
             return False

@@ -77,7 +77,9 @@ def load_config():
                     changed = True
                     sys.stderr.write("config migrated: WSL hosts removed from %s because WSL discovery is off\n" % mp)
         except Exception as ex:
-            sys.stderr.write("config migrated: could not prune WSL hosts from the manifest (%s); run `init` to regenerate it\n" % ex)
+            # the manifest was not inspected: keep the home below version 3 so the next load tries again
+            cfg["version"] = min(int(cfg.get("version") or 1), 2)
+            sys.stderr.write("config migrated: could not prune WSL hosts from the manifest (%s); the reconciliation will be retried on the next load, or run `init` to regenerate it\n" % ex)
         consent = os.path.join(home_dir(), schedule.CONSENT_FILE)
         if changed and os.path.isfile(consent):
             os.replace(consent, consent + ".withdrawn")

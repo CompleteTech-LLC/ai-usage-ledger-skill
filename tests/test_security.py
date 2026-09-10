@@ -650,13 +650,39 @@ def check_followups_1_5_9():
     dbp.commit()
     dbp.close()
     partial_refused = not ledger_archive.Archive._is_legacy_archive(partial)
+    # a `runs` view exposing our columns is not our index either
+    viewd = os.path.join(base, "viewd")
+    os.makedirs(viewd)
+    dbv = _sq.connect(os.path.join(viewd, "index.sqlite"))
+    dbv.execute("CREATE TABLE files (host TEXT, path TEXT, rel TEXT, size INTEGER, mtime REAL, sha256 TEXT, archived_at TEXT, versions INTEGER DEFAULT 1, PRIMARY KEY (host, path))")
+    dbv.execute("CREATE TABLE runs_ (id INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT, started_at TEXT, finished_at TEXT, files_new INTEGER, files_updated INTEGER, bytes INTEGER, note TEXT)")
+    dbv.execute("CREATE VIEW runs AS SELECT * FROM runs_")
+    dbv.commit()
+    dbv.close()
+    view_refused = not ledger_archive.Archive._is_legacy_archive(viewd)
+    # a reconciliation that could not inspect the manifest is retried on the next load
+    mpath = os.path.join(home, "manifest.json")
+    good_manifest = open(mpath, encoding="utf-8").read()
+    mj = json.loads(good_manifest)
+    mj["hosts"].append({"name": "wsl-ubuntu", "kind": "wsl", "distro": "Ubuntu", "codex_roots": ["/home/u/.codex"]})
+    open(mpath, "w", encoding="utf-8").write("{not json" + json.dumps(mj))
+    c7 = json.load(open(cfgp, encoding="utf-8"))
+    c7["version"] = 2
+    c7["detect"] = {"all_profiles": False, "wsl": False, "on_every_run": True}
+    json.dump(c7, open(cfgp, "w", encoding="utf-8"))
+    run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
+    retry_pending = json.load(open(cfgp, encoding="utf-8")).get("version") == 2
+    json.dump(mj, open(mpath, "w", encoding="utf-8"))  # repaired: the next load prunes the WSL host
+    run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
+    m7 = json.load(open(mpath, encoding="utf-8"))
+    retried = retry_pending and json.load(open(cfgp, encoding="utf-8")).get("version") == 3 and not any(h.get("kind") == "wsl" for h in m7["hosts"])
     # an invalid archive path stops onboarding before accounts.json is rewritten
     acc_before = open(os.path.join(home, "accounts.json"), encoding="utf-8").read()
     r5 = run([PY, os.path.join(SCRIPTS, "ledger.py"), "init", "--yes", "--set", "archive.raw_logs=y", "--set", "archive.path=" + foreign, "--set", "accounts.from_credentials=y"], env=env)
     early = r5.returncode != 0 and "already holds other files" in (r5.stderr + r5.stdout) and open(os.path.join(home, "accounts.json"), encoding="utf-8").read() == acc_before
-    good = hidden and gone and status_ok and refused and marker and migrated and withdrawn and kept and foreign_refused and legacy_ok and contained_ok and pruned and early and reconciled and consent_kept and partial_refused
-    print("followups: legacy row hidden %s / purged in other mode %s, status post-purge %s, unrelated dir refused %s / marker %s, legacy wsl withdrawn %s (explicit kept %s), foreign index refused %s / legacy accepted %s, escape row kept %s, manifest pruned + consent withdrawn %s, archive path checked first %s, v2 home reconciled %s, consent kept without WSL hosts %s, partial schema refused %s  %s" % (
-        hidden, gone, status_ok, refused, marker, withdrawn, kept, foreign_refused, legacy_ok, contained_ok, pruned, early, reconciled, consent_kept, partial_refused, "OK" if good else "FAIL"))
+    good = hidden and gone and status_ok and refused and marker and migrated and withdrawn and kept and foreign_refused and legacy_ok and contained_ok and pruned and early and reconciled and consent_kept and partial_refused and view_refused and retried
+    print("followups: legacy row hidden %s / purged in other mode %s, status post-purge %s, unrelated dir refused %s / marker %s, legacy wsl withdrawn %s (explicit kept %s), foreign index refused %s / legacy accepted %s, escape row kept %s, manifest pruned + consent withdrawn %s, archive path checked first %s, v2 home reconciled %s, consent kept without WSL hosts %s, partial schema refused %s, view refused %s, failed reconcile retried %s  %s" % (
+        hidden, gone, status_ok, refused, marker, withdrawn, kept, foreign_refused, legacy_ok, contained_ok, pruned, early, reconciled, consent_kept, partial_refused, view_refused, retried, "OK" if good else "FAIL"))
     if not good:
         print(r.stdout[-300:], r.stderr[-300:], s1.stderr[-200:], r2.stderr[-200:])
     shutil.rmtree(base, ignore_errors=True)
