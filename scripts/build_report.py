@@ -315,6 +315,14 @@ def price_usage(usage, pricing, model):
             + usage.get("cacheCreationInputTokens", 0) * row["cache_write_5m"] + usage.get("outputTokens", 0) * row["output"]) / 1e6
 
 
+def write_sums(out_dir):
+    """SHA256SUMS over every regular file in the package except itself; run_pipeline calls it again after adding optional files."""
+    names = sorted(n for n in os.listdir(out_dir) if n != "SHA256SUMS" and os.path.isfile(os.path.join(out_dir, n)))
+    with open(os.path.join(out_dir, "SHA256SUMS"), "w", encoding="utf-8") as fh:
+        for name in names:
+            fh.write("%s  %s\n" % (sha256(os.path.join(out_dir, name)), name))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiled", default="compiled")
@@ -515,7 +523,10 @@ def main():
              for m, r in P["models"].items() if m in used]
     D.table(["Model", "Input /M", "Cache read /M", "Cache write 5m /M", "Cache write 1h /M", "Output /M", "Basis"], prows, ["l", "r", "r", "r", "r", "r", "l"])
     D.h(3, "2.4 Accounts and subscription attribution")
-    D.p("Accounts were identified from the credential files on each host. Codex rollouts record the billing plan on every call (`rate_limits.plan_type`) but not the account, so calls are attributed to accounts by ordered rules in `accounts.json`; each rule carries its evidence and a confidence level. A subscription month is counted only when the account recorded at least one call in that month.")
+    _src = (S.get("accounts") or {}).get("source") or "credential files"
+    _how = {"host placeholders": "Accounts are placeholders named after each host: credential files were not read, so plans and billing are unknown until `accounts.json` is filled in.",
+            "credential files, minimised": "Accounts were identified from the credential files on each host with identity minimised: pseudonymous account ids and plan types only, no e-mail addresses or organisation names."}.get(_src, "Accounts were identified from the credential files on each host.")
+    D.p(_how + " Codex rollouts record the billing plan on every call (`rate_limits.plan_type`) but not the account, so calls are attributed to accounts by ordered rules in `accounts.json`; each rule carries its evidence and a confidence level. A subscription month is counted only when the account recorded at least one call in that month.")
     if AREG:
         D.table(["Account", "Identity", "Plan", "Price", "Evidence"], [["`%s`" % k, v.get("label", ""), v.get("plan", ""), "$%d/mo" % v.get("monthly_usd", 0) if v.get("monthly_usd") else "usage-based / n.a.", v.get("evidence", "")] for k, v in AREG.items()], ["l"] * 5)
         D.table(["Rule (first match wins)", "Account", "Billing", "Confidence", "Why"], [["`%s`" % ", ".join("%s=%s" % kv for kv in r.get("when", {}).items()), "`%s`" % r["account"], r.get("billing", ""), r.get("confidence", ""), r.get("why", "")] for r in ARULES], ["l"] * 5)
@@ -710,7 +721,7 @@ def main():
         ["Cache hit rate", "`cache_read ÷ (input_uncached + cache_read + cache_write)`."],
         ["API-equivalent cost", "Tokens × list price per token class, from `pricing.json`."],
         ["Cache saving", "`cost_if_uncached − api_cost`, where `cost_if_uncached` prices every prompt token at the input rate."],
-        ["Account", "A login identified from a credential file; assigned to calls by the rules in accounts.json."],
+        ["Account", "A login identified from a credential file (or a per-host placeholder when credential files were not read); assigned to calls by the rules in accounts.json."],
         ["Usage-based", "A call billed per token to a prepaid or metered org rather than covered by a subscription."],
     ], ["l", "l"])
     D.h(2, "Appendix B. Package contents")
@@ -754,9 +765,7 @@ SHA256SUMS binds the content files in this package.
         _style, _header, _footer, _link = brand_blocks(CFG, os.path.dirname(os.path.abspath(a.config)) if a.config else None)
         _theme = str(CFG.get("theme_default") or "system")
         fh.write(HTML_HEAD.replace("__TITLE__", _html.escape(str(CFG.get("html_title", "Agent Usage Study")), quote=True)) + _link + _style + THEME_JS.replace("__THEME_DEFAULT__", _theme if _theme in ("light", "dark", "system") else "system") + THEMEBAR_HTML + '<div class="wrap">' + _header + "\n".join(D.html) + _footer + "</div>")
-    with open(os.path.join(a.out, "SHA256SUMS"), "w", encoding="utf-8") as fh:
-        for name in ("USAGE_REPORT.md", "report.html", "ledger.json", "pricing.json", "README.md"):
-            fh.write("%s  %s\n" % (sha256(os.path.join(a.out, name)), name))
+    write_sums(a.out)
     print("package written to", a.out)
 
 

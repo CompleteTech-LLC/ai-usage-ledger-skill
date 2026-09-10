@@ -248,15 +248,23 @@ def check_persistence_consent():
     expiry_changes = r7.returncode == 3 and "changed since consent" in r7.stdout
     r8 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)
     acked = r8.returncode == 0 and "--archive" in r8.stdout
+    # a scheduled run is pinned to the consented configuration: the wrapper passes --scheduled, and a manifest that
+    # changed since consent (a new host appeared) is refused before anything is scanned
+    m = json.load(open(os.path.join(home, "manifest.json"), encoding="utf-8"))
+    m["hosts"].append({"name": "surprise", "kind": "local", "codex_roots": ["/nowhere/.codex"]})
+    json.dump(m, open(os.path.join(home, "manifest.json"), "w", encoding="utf-8"))
+    r10 = run([PY, ledger, "run", "--scheduled", "--no-scan"], env=env)
+    pinned = r10.returncode != 0 and "scheduled run refused" in (r10.stderr + r10.stdout) and "changed since consent" in (r10.stderr + r10.stdout)
+    wrapper_flag = "--scheduled" in schedule.wrapper_body(home, PY, ["anonymize"])
     # an expired scheduled run does nothing and never touches a scheduler entry it did not consent to
     os.remove(os.path.join(home, "schedule-consent.json"))
     r9 = run([PY, ledger, "run", "--until", "2000-01-01"], env=env)
     expired = r9.returncode == 0 and "expired" in r9.stdout and "nothing to do" in r9.stdout
-    good = onboarding_safe and refused and stale and accepted and sensitive_refused and unacked and expiry_changes and acked and expired
-    print("persistence: onboarding never installs %s, no-consent refused %s, stale consent refused %s, matching consent accepted %s, high-impact refused %s / unacknowledged %s / acknowledged %s, expiry re-consent %s, expired run inert %s  %s" % (
-        onboarding_safe, refused, stale, accepted, sensitive_refused, unacked, acked, expiry_changes, expired, "OK" if good else "FAIL"))
+    good = onboarding_safe and refused and stale and accepted and sensitive_refused and unacked and expiry_changes and acked and expired and pinned and wrapper_flag
+    print("persistence: onboarding never installs %s, no-consent refused %s, stale consent refused %s, matching consent accepted %s, high-impact refused %s / unacknowledged %s / acknowledged %s, expiry re-consent %s, expired run inert %s, scheduled run pinned to consent %s  %s" % (
+        onboarding_safe, refused, stale, accepted, sensitive_refused, unacked, acked, expiry_changes, expired, pinned and wrapper_flag, "OK" if good else "FAIL"))
     if not good:
-        print(r1.stdout[-300:], r1.stderr[-200:], r2.stdout[-300:], r3.stdout[-200:], r4.stdout[-300:], r5.stdout[-200:], r6.stdout[-200:], r7.stdout[-200:], r8.stdout[-200:], r9.stdout[-200:])
+        print(r1.stdout[-300:], r1.stderr[-200:], r2.stdout[-300:], r3.stdout[-200:], r4.stdout[-300:], r5.stdout[-200:], r6.stdout[-200:], r7.stdout[-200:], r8.stdout[-200:], r9.stdout[-200:], r10.stdout[-300:], r10.stderr[-300:])
     shutil.rmtree(home, ignore_errors=True)
     return good
 
@@ -272,6 +280,17 @@ def check_credential_minimisation():
     acc = json.load(open(os.path.join(home, "accounts.json"), encoding="utf-8"))
     blob = json.dumps(acc)
     default_ok = r1.returncode == 0 and "Reading credential files" not in r1.stderr and "@" not in blob and acc.get("_sensitivity") == "placeholders" and "auth.json (last_refresh" not in blob
+    # a legacy (pre-preference) accounts.json is redrafted on the next init even when the defaults are accepted
+    legacy = os.path.join(home, "accounts.json")
+    json.dump({"accounts": {"codex:legacy": {"label": "legacy@corp.example", "emails": ["legacy@corp.example"], "plan": "ChatGPT Pro", "monthly_usd": 200}}, "rules": []}, open(legacy, "w", encoding="utf-8"))
+    cfgp = os.path.join(home, "config.json")
+    c0 = json.load(open(cfgp, encoding="utf-8"))
+    c0.pop("accounts", None)  # a 1.5.4 config had no accounts mapping
+    json.dump(c0, open(cfgp, "w", encoding="utf-8"))
+    rl = run([PY, ledger, "init", "--yes"], env=env)
+    accl = json.load(open(legacy, encoding="utf-8"))
+    legacy_redrafted = rl.returncode == 0 and "redrafted" in rl.stdout and "legacy@corp.example" not in json.dumps(accl) and any(f.startswith("accounts.json.before-") for f in os.listdir(home))
+    default_ok = default_ok and legacy_redrafted
     # opt in, minimised: a warning names the files, and no e-mail or organisation title is retained
     r2 = run([PY, ledger, "init", "--yes", "--set", "accounts.from_credentials=y", "--set", "accounts.identifiable=n"], env=env)
     acc2 = json.load(open(os.path.join(home, "accounts.json"), encoding="utf-8"))
@@ -303,6 +322,15 @@ def check_credential_minimisation():
               and ("organisation name" in r3.stdout or "account id prefix" in r3.stdout or "account key" in r3.stdout))
     rz = run([PY, ledger, "publish-check", os.path.join(home, "pkg.zip")], env=env)
     caught = caught and rz.returncode == 1 and "e-mail address" in rz.stdout
+    # a DOCX is read through its XML parts, so an e-mail inside a document is found
+    with zipfile.ZipFile(os.path.join(home, "doc.docx"), "w") as z:
+        z.writestr("word/document.xml", '<w:document><w:p><w:r><w:t>Prepared for person@corp.example</w:t></w:r></w:p></w:document>')
+    rd = run([PY, ledger, "publish-check", os.path.join(home, "doc.docx")], env=env)
+    caught = caught and rd.returncode == 1 and "e-mail address" in rd.stdout
+    # placeholders never claim a subscription
+    ph = json.loads(run([PY, os.path.join(SCRIPTS, "detect_hosts.py"), "--json", "--no-wsl"], env=env).stdout)["accounts"]
+    placeholder_billing = all(r.get("billing") == "unknown" for r in ph["rules"] if "placeholder" in (r.get("why") or "")) and ph.get("_source") == "host placeholders"
+    caught = caught and placeholder_billing
     clean_dir = os.path.join(home, "clean")
     os.makedirs(clean_dir, exist_ok=True)
     open(os.path.join(clean_dir, "USAGE_REPORT.md"), "w", encoding="utf-8").write("host-1a2b3c: 1,510 calls, example@example.com placeholder only. Claude Code keeps its login in `.claude.json`; auth.json is never copied.\n")

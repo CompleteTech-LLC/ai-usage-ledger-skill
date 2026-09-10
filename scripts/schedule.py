@@ -47,7 +47,7 @@ def wrapper_path(home):
     return os.path.join(home, "run-ledger.cmd" if IS_WIN else "run-ledger.sh")
 
 
-RUN_FLAGS = {"anonymize": "--anonymize", "archive": "--archive"}  # the only options a scheduled run may carry
+RUN_FLAGS = {"anonymize": "--anonymize", "archive": "--archive"}  # the only options a scheduled run may carry (plus --scheduled and --until)
 CONSENT_FILE = "schedule-consent.json"
 
 
@@ -63,7 +63,7 @@ def wrapper_body(home, python, flags=(), expires=None):
     log = os.path.join(home, "logs", "run.log")
     for v, what in ((home, "ledger home"), (python, "python path")):
         _check_plain(v, what)
-    args = [RUN_FLAGS[f] for f in flags if f in RUN_FLAGS]
+    args = ["--scheduled"] + [RUN_FLAGS[f] for f in flags if f in RUN_FLAGS]
     if expires:
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(expires)):
             raise SystemExit("expires must be YYYY-MM-DD")
@@ -109,7 +109,10 @@ def _run(cmd, dry_run=False, input_text=None):
 
 
 def crontab_lines():
-    r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    try:
+        r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    except (FileNotFoundError, OSError):
+        return []
     if r.returncode != 0:
         return []
     return [line for line in r.stdout.splitlines()]
@@ -214,7 +217,10 @@ def check_consent(home, mat):
 
 def existing_entry():
     if IS_WIN:
-        r = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, text=True)
+        try:
+            r = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, text=True)
+        except (FileNotFoundError, OSError):
+            return None
         return TASK_NAME if r.returncode == 0 else None
     lines = [x for x in crontab_lines() if MARK in x]
     return lines[0] if lines else None
@@ -229,9 +235,6 @@ def install(home, python, frequency, time_, weekday="mon", flags=(), dry_run=Fal
         return remove(home, dry_run)
     mat = material_config(home, python, frequency, time_, weekday, flags, expires, manifest)
     print(disclosure(home, mat, workdir))
-    prior = existing_entry()
-    if prior:
-        print("  NOTE: an entry already exists (%s) and will be replaced." % prior)
     ok, why = check_consent(home, mat)
     if not ok:
         interactive = consent == "ask" and sys.stdin.isatty() and sys.stdout.isatty()
@@ -253,6 +256,9 @@ def install(home, python, frequency, time_, weekday="mon", flags=(), dry_run=Fal
             write_consent(home, mat, os.environ.get("USERNAME") or os.environ.get("USER") or "operator", ack)
     else:
         print("  consent: %s" % why)
+    prior = existing_entry()  # looked up only once consent is settled, and tolerant of a missing scheduler binary
+    if prior:
+        print("  NOTE: an entry already exists (%s) and will be replaced." % prior)
     wrapper = write_wrapper(home, python, flags, expires) if not dry_run else wrapper_path(home)
     if IS_WIN:
         cmd = ["schtasks", "/Create", "/F", "/TN", TASK_NAME, "/TR", '"%s"' % wrapper, "/ST", "%02d:%02d" % (hh, mm)]

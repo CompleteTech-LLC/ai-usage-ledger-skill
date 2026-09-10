@@ -263,6 +263,8 @@ def main():
                 fh.write("# Sensitivity\n\nThis package includes `accounts.json`, which names accounts (identifiers, plans and possibly e-mail addresses or organisation names) "
                          "and the credential files they were read from. Treat the package as internal. Run `python3 scripts/ledger.py publish-check <this directory>` "
                          "before sharing it, or share the anonymised package instead.\n")
+            import build_report
+            build_report.write_sums(pkg)  # the checksum file binds the optional files too
         zpath = pkg + ".zip"
         with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
             for fn in sorted(os.listdir(pkg)):

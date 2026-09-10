@@ -1618,7 +1618,7 @@ def cmd_report(a):
             "inventory": inventories,
             "costs": {"subscription_rows": sub_rows, "subscription_totals": sub_tot, "assumed_models": assumed_models,
                       "pricing": pricing},
-            "accounts": {"registry": acct_reg, "rules": (AC or {}).get("rules", []), "by_account": by_account, "by_account_month": by_account_month,
+            "accounts": {"registry": acct_reg, "rules": (AC or {}).get("rules", []), "source": (AC or {}).get("_source") or ("credential files" if AC else None), "by_account": by_account, "by_account_month": by_account_month,
                          "by_account_host": by_account_host, "by_plan": by_plan, "by_billing_month": by_billing_month,
                          "subscription_rows": acct_rows, "subscription_totals": acct_tot},
         }, f)

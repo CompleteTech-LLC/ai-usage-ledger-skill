@@ -181,6 +181,7 @@ def set_dotted(cfg, key, value):
         cfg["detect"][key[7:]] = value in ("y", "yes", "true", True)
     elif key in ("accounts.from_credentials", "accounts.identifiable"):
         cfg.setdefault("accounts", {"from_credentials": False, "identifiable": False})[key[9:]] = value in ("y", "yes", "true", True)
+        cfg["accounts"]["explicit"] = True
     elif key == "anonymize.on_every_run":
         cfg.setdefault("anonymize", {"salt": secrets.token_hex(16)})["on_every_run"] = value in ("y", "yes", "true", True)
     elif key in ("archive.raw_logs", "archive.compress"):
@@ -207,7 +208,8 @@ def ask(prompt, default, choices=None):
 
 def migrate_config(cfg):
     """Add keys introduced after the config was written, so older homes keep working."""
-    cfg.setdefault("accounts", {"from_credentials": False, "identifiable": False})
+    if "accounts" not in cfg:
+        cfg["accounts"] = {"from_credentials": False, "identifiable": False, "explicit": False}  # legacy home: preference never chosen
     cfg.setdefault("anonymize", {"on_every_run": False, "salt": secrets.token_hex(16)})
     cfg.setdefault("archive", {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")})
     cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon", "installed_at": None})
@@ -257,14 +259,23 @@ def onboard(args):
     if fresh or not os.path.isfile(cfg["pricing_path"]):
         with open(os.path.join(SKILL, "templates", "pricing.json"), encoding="utf-8") as fh:
             safety.write_private(cfg["pricing_path"], fh.read())
-    pref_changed = (cfg.get("accounts") or {}) != prev_accounts_pref
+    acc_now = cfg.get("accounts") or {}
+    pref_changed = {k: v for k, v in acc_now.items() if k != "explicit"} != {k: v for k, v in prev_accounts_pref.items() if k != "explicit"}
+    legacy_draft = False
+    if os.path.isfile(cfg["accounts_path"]) and not prev_accounts_pref.get("explicit", True):
+        try:
+            with open(cfg["accounts_path"], encoding="utf-8") as fh:
+                legacy_draft = "_sensitivity" not in json.load(fh)  # drafted before the preference existed: credential-derived by default
+        except Exception:
+            legacy_draft = False
+    acc_now["explicit"] = True  # after onboarding the preference is a decision, whether typed, set or accepted as default
     if fresh or not os.path.isfile(cfg["accounts_path"]) or args.reinit:
         write_json_private(cfg["accounts_path"], accounts)
-    elif pref_changed:
+    elif pref_changed or legacy_draft:
         backup = cfg["accounts_path"] + ".before-" + datetime.now().strftime("%Y%m%d-%H%M%S")
         shutil.copy(cfg["accounts_path"], backup)
         write_json_private(cfg["accounts_path"], accounts)
-        print("accounts.json redrafted because the credential preferences changed; the previous file is kept at %s" % backup)
+        print("accounts.json redrafted %s; the previous file is kept at %s" % ("because the credential preferences changed" if pref_changed else "under the credential preference now on record (it predated that preference)", backup)),
     write_manifest(cfg, hosts)
     write_report_config(cfg)
     if fresh or not cfg.get("initialized_at"):
@@ -356,13 +367,30 @@ def do_run(args):
     if getattr(args, "until", None) and datetime.now().strftime("%Y-%m-%d") > args.until:
         if os.path.isfile(schedule.consent_path(home_dir())):
             print("scheduled run expired on %s; removing the schedule" % args.until)
-            return schedule.remove(home_dir())
+            rc = schedule.remove(home_dir())
+            cfg0 = load_config()
+            if rc == 0 and cfg0:
+                cfg0.setdefault("schedule", {}).update({"frequency": "none", "expires": None, "installed_at": None, "consent": None})
+                save_config(cfg0)
+            return rc
         print("scheduled run expired on %s; nothing to do (no schedule consent recorded for %s)" % (args.until, home_dir()))
         return 0
     cfg = load_config()
     if cfg is None:
         raise SystemExit("No configuration at %s. Run `python3 scripts/ledger.py init` first (interactive), or `init --yes` for neutral defaults; "
                          "nothing is scanned and no branding is chosen without that step." % config_path())
+    if getattr(args, "scheduled", False):
+        # a scheduled run may only do what was consented to: no host re-detection, and the manifest, flags and
+        # schedule must still hash to the consented configuration
+        args.no_detect = True
+        sch = cfg.get("schedule") or {}
+        flags = ["anonymize"] if cfg.get("anonymize", {}).get("on_every_run") else []
+        if cfg.get("archive", {}).get("raw_logs"):
+            flags.append("archive")
+        mat = schedule.material_config(home_dir(), sys.executable, sch.get("frequency") or "daily", sch.get("time") or "03:00", sch.get("weekday") or "mon", flags, sch.get("expires"), cfg.get("manifest_path"))
+        ok, why = schedule.check_consent(home_dir(), mat)
+        if not ok:
+            raise SystemExit("scheduled run refused: %s. Re-run `python3 scripts/ledger.py schedule install` to review and consent again." % why)
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
     t0 = time.time()
     if cfg["detect"].get("on_every_run", True) and not args.no_detect:
@@ -623,7 +651,7 @@ def publish_check(target, accounts_path=None, extra_terms=()):
 
     def add(kind, value, boundary=None, flags=re.IGNORECASE):
         v = str(value or "").strip()
-        if len(v) < 4:
+        if len(v) < (2 if boundary else 4):  # bounded terms may be short ("dev", "IBM"); substring terms must not be
             return
         pat = re.escape(v)
         if boundary == "alnum":
@@ -655,10 +683,40 @@ def publish_check(target, accounts_path=None, extra_terms=()):
     secret_key_re = re.compile(r"\b(id_token|access_token|refresh_token|OPENAI_API_KEY|ANTHROPIC_API_KEY|api_key)\b\s*[\"':=]", re.IGNORECASE)
     findings = []
     texts = []  # (display name, text)
-    binary = (".png", ".pdf", ".docx", ".sqlite", ".gz", ".db", ".jpg", ".jpeg", ".ico", ".woff", ".woff2", ".ttf")
+    binary = (".png", ".sqlite", ".gz", ".db", ".jpg", ".jpeg", ".ico", ".woff", ".woff2", ".ttf")
+
+    def document_text(path):
+        """Text of a DOCX (its XML parts) or a PDF (pypdf when installed); None when it cannot be read."""
+        low = path.lower()
+        if low.endswith(".docx"):
+            import zipfile
+            try:
+                with zipfile.ZipFile(path) as z:
+                    parts = [n for n in z.namelist() if n.startswith("word/") and n.endswith(".xml")]
+                    xml = " ".join(z.read(n).decode("utf-8", "replace") for n in parts)
+                return re.sub(r"<[^>]+>", " ", xml)
+            except Exception:
+                return None
+        if low.endswith(".pdf"):
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(path)
+                return " ".join((pg.extract_text() or "") for pg in reader.pages)
+            except ImportError:
+                return None
+            except Exception:
+                return None
+        return None
 
     def add_file(path):
         if path.lower().endswith(binary):
+            return
+        if path.lower().endswith((".pdf", ".docx")):
+            t = document_text(path)
+            if t is None:
+                findings.append((path, "unscannable document", "install pypdf to scan PDFs, or check the Markdown source instead"))
+            else:
+                texts.append((path, t))
             return
         if path.lower().endswith(".zip"):
             import zipfile
@@ -666,6 +724,9 @@ def publish_check(target, accounts_path=None, extra_terms=()):
                 with zipfile.ZipFile(path) as z:
                     for info in z.infolist():
                         if info.is_dir() or info.filename.lower().endswith(binary):
+                            continue
+                        if info.filename.lower().endswith((".pdf", ".docx")):
+                            findings.append((path + "!" + info.filename, "unscannable document", "extract the archive and check the document, or its Markdown source"))
                             continue
                         texts.append((path + "!" + info.filename, z.read(info).decode("utf-8", "replace")))
             except zipfile.BadZipFile:
@@ -766,6 +827,7 @@ def main():
     r.add_argument("--anonymize", action="store_true", help="also build the anonymised copy under <workdir>/anonymized")
     r.add_argument("--archive", action="store_true", help="also archive the raw log files this once (archive.raw_logs=y does it every run)")
     r.add_argument("--until", help="YYYY-MM-DD: used by scheduled wrappers; after this date the run does nothing and removes the schedule")
+    r.add_argument("--scheduled", action="store_true", help="used by the scheduled wrapper: no host re-detection, and the run refuses unless the consented configuration still matches")
     r.set_defaults(fn=do_run)
     s = sub.add_parser("status")
     s.set_defaults(fn=do_status)
