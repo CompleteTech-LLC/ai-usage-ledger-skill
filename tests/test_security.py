@@ -575,8 +575,8 @@ def check_followups_1_5_9():
     c["detect"] = {"all_profiles": False, "wsl": True, "on_every_run": True}
     json.dump(c, open(cfgp, "w", encoding="utf-8"))
     s1 = run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
-    c1 = json.load(open(cfgp, encoding="utf-8"))  # status only reads; migration is applied on load, persisted on next save
-    migrated = "migrated" in s1.stderr and c1["detect"]["wsl"] is True  # file untouched until a save
+    c1 = json.load(open(cfgp, encoding="utf-8"))  # the withdrawal is persisted as soon as the config is loaded
+    migrated = "migrated" in s1.stderr and c1["detect"]["wsl"] is False and c1.get("version") == 2  # persisted on load
     r2 = run([PY, os.path.join(SCRIPTS, "ledger.py"), "init", "--yes"], env=env)
     c2 = json.load(open(cfgp, encoding="utf-8"))
     withdrawn = r2.returncode == 0 and c2["detect"]["wsl"] is False and c2.get("version") == 2
@@ -586,9 +586,45 @@ def check_followups_1_5_9():
     run([PY, os.path.join(SCRIPTS, "ledger.py"), "init", "--yes"], env=env)
     c3 = json.load(open(cfgp, encoding="utf-8"))
     kept = c3["detect"]["wsl"] is True
-    good = hidden and gone and status_ok and refused and marker and migrated and withdrawn and kept
-    print("followups: legacy row hidden %s / purged in other mode %s, status post-purge %s, unrelated dir refused %s / marker %s, legacy wsl withdrawn %s (explicit kept %s)  %s" % (
-        hidden, gone, status_ok, refused, marker, withdrawn, kept, "OK" if good else "FAIL"))
+    # an unmarked directory with a foreign index.sqlite or extra files is refused; a real legacy archive is accepted
+    foreign = os.path.join(base, "foreign")
+    os.makedirs(foreign)
+    import sqlite3 as _sq
+    _sq.connect(os.path.join(foreign, "index.sqlite")).execute("CREATE TABLE t (x)").connection.close()
+    open(os.path.join(foreign, "photos.zip"), "w").write("x")
+    foreign_refused = _raises(lambda: ledger_archive.Archive(foreign))
+    legacy = ledger_archive.Archive(os.path.join(base, "legacy"))
+    legacy.close()
+    os.remove(os.path.join(base, "legacy", ".ai-usage-ledger-archive"))
+    legacy_ok = not _raises(lambda: ledger_archive.Archive(os.path.join(base, "legacy")).close())
+    # a legacy row whose host escapes the root is kept as unremovable and nothing outside is touched
+    outside = os.path.join(base, "victim-secret.key")
+    open(outside, "w").write("x")
+    a3 = ledger_archive.Archive(os.path.join(base, "arch3"))
+    a3.db.execute("INSERT INTO files (host, path, rel, size, mtime, sha256, archived_at) VALUES (?,?,?,?,?,?,?)", ("..", "/victim-secret.key", "victim-secret.key", 1, 0, "s", "t"))
+    a3.db.commit()
+    p3, u3 = a3.purge_credential_rows()
+    a3.close()
+    contained_ok = p3 == 0 and u3 == 1 and os.path.isfile(outside)
+    # migration prunes WSL hosts from the manifest and sets a schedule consent aside
+    m = json.load(open(os.path.join(home, "manifest.json"), encoding="utf-8"))
+    m["hosts"].append({"name": "wsl-ubuntu", "kind": "wsl", "distro": "Ubuntu", "codex_roots": ["/home/u/.codex"]})
+    json.dump(m, open(os.path.join(home, "manifest.json"), "w", encoding="utf-8"))
+    open(os.path.join(home, "schedule-consent.json"), "w").write("{}")
+    c4 = json.load(open(cfgp, encoding="utf-8"))
+    c4["version"] = 1
+    c4["detect"] = {"all_profiles": False, "wsl": True, "on_every_run": True}
+    json.dump(c4, open(cfgp, "w", encoding="utf-8"))
+    s4 = run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
+    m4 = json.load(open(os.path.join(home, "manifest.json"), encoding="utf-8"))
+    pruned = s4.returncode == 0 and not any(h.get("kind") == "wsl" for h in m4["hosts"]) and not os.path.exists(os.path.join(home, "schedule-consent.json")) and os.path.exists(os.path.join(home, "schedule-consent.json.withdrawn")) and json.load(open(cfgp, encoding="utf-8")).get("version") == 2
+    # an invalid archive path stops onboarding before accounts.json is rewritten
+    acc_before = open(os.path.join(home, "accounts.json"), encoding="utf-8").read()
+    r5 = run([PY, os.path.join(SCRIPTS, "ledger.py"), "init", "--yes", "--set", "archive.raw_logs=y", "--set", "archive.path=" + foreign, "--set", "accounts.from_credentials=y"], env=env)
+    early = r5.returncode != 0 and "already holds other files" in (r5.stderr + r5.stdout) and open(os.path.join(home, "accounts.json"), encoding="utf-8").read() == acc_before
+    good = hidden and gone and status_ok and refused and marker and migrated and withdrawn and kept and foreign_refused and legacy_ok and contained_ok and pruned and early
+    print("followups: legacy row hidden %s / purged in other mode %s, status post-purge %s, unrelated dir refused %s / marker %s, legacy wsl withdrawn %s (explicit kept %s), foreign index refused %s / legacy accepted %s, escape row kept %s, manifest pruned + consent withdrawn %s, archive path checked first %s  %s" % (
+        hidden, gone, status_ok, refused, marker, withdrawn, kept, foreign_refused, legacy_ok, contained_ok, pruned, early, "OK" if good else "FAIL"))
     if not good:
         print(r.stdout[-300:], r.stderr[-300:], s1.stderr[-200:], r2.stderr[-200:])
     shutil.rmtree(base, ignore_errors=True)

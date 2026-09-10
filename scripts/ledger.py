@@ -60,7 +60,28 @@ def load_config():
     import safety
     safety.refuse_if_shared(p, "ledger config")
     with open(p, encoding="utf-8") as fh:
-        return migrate_config(json.load(fh))
+        cfg = migrate_config(json.load(fh))
+    if cfg.pop("_wsl_withdrawn", False):
+        # the manifest and any scheduled consent were built under the old default: drop the WSL hosts now and
+        # invalidate the consent so a scheduled run refuses until the operator reviews the new scope
+        mp = cfg.get("manifest_path")
+        try:
+            if mp and os.path.isfile(mp):
+                with open(mp, encoding="utf-8") as fh:
+                    m = json.load(fh)
+                kept = [h for h in m.get("hosts", []) if h.get("kind") != "wsl"]
+                if len(kept) != len(m.get("hosts", [])):
+                    m["hosts"] = kept
+                    write_json_private(mp, m)
+                    sys.stderr.write("config migrated: WSL hosts removed from %s\n" % mp)
+        except Exception as ex:
+            sys.stderr.write("config migrated: could not prune WSL hosts from the manifest (%s); run `init` to regenerate it\n" % ex)
+        consent = os.path.join(home_dir(), schedule.CONSENT_FILE)
+        if os.path.isfile(consent):
+            os.replace(consent, consent + ".withdrawn")
+            sys.stderr.write("config migrated: the scheduled-run consent was set aside because the scanned scope changed; scheduled runs will refuse until `schedule install` is confirmed again\n")
+        save_config(cfg)
+    return cfg
 
 
 def save_config(cfg):
@@ -226,6 +247,14 @@ def ask(prompt, default, choices=None):
         return val
 
 
+def check_archive_path(cfg):
+    """A raw-log archive needs a dedicated directory; refuse before anything else happens in onboarding."""
+    arc = cfg.get("archive") or {}
+    ap_ = arc.get("path") or ""
+    if arc.get("raw_logs") and os.path.isdir(ap_) and os.listdir(ap_) and not os.path.exists(os.path.join(ap_, ".ai-usage-ledger-archive")) and not ledger_archive.Archive._is_legacy_archive(ap_):
+        raise SystemExit("archive.path %s already holds other files; choose an empty or new directory dedicated to the archive (it is what `remove everything` deletes)" % ap_)
+
+
 def migrate_config(cfg):
     """Add keys introduced after the config was written, so older homes keep working."""
     if "accounts" not in cfg:
@@ -239,6 +268,7 @@ def migrate_config(cfg):
         d = cfg["detect"]
         if d.get("wsl") and not d.get("explicit"):  # never chosen by the operator: the pre-1.5.8 default is withdrawn
             d["wsl"] = False
+            cfg["_wsl_withdrawn"] = True
             sys.stderr.write("config migrated: WSL discovery is now off by default; re-enable it with `init --set detect.wsl=y` if you want it.\n")
         cfg["version"] = CONFIG_VERSION
     cfg.setdefault("branding", dict(DEFAULT_BRAND))
@@ -261,6 +291,7 @@ def onboard(args):
         print("\nAI usage ledger — onboarding. Press Enter to accept a default.\n")
         for key, prompt, current, choices in QUESTIONS:
             set_dotted(cfg, key, ask(prompt, current(cfg), choices))
+    check_archive_path(cfg)  # before detection, credential reads or any file is written
     # detection
     print("\nDetecting agent logs on this machine%s..." % (" and its WSL distros" if cfg["detect"]["wsl"] and detect_hosts.IS_WIN else ""))
     hosts, notes = detect_hosts.detect_hosts(all_profiles=cfg["detect"]["all_profiles"], probe_wsl=cfg["detect"]["wsl"])
@@ -311,9 +342,6 @@ def onboard(args):
     cfg.setdefault("anonymize", {"on_every_run": False, "salt": secrets.token_hex(16)})
     cfg.setdefault("archive", {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")})
     cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon", "install": False, "installed_at": None})
-    ap_ = cfg["archive"].get("path") or ""
-    if cfg["archive"].get("raw_logs") and os.path.isdir(ap_) and os.listdir(ap_) and not os.path.exists(os.path.join(ap_, ".ai-usage-ledger-archive")) and not os.path.exists(os.path.join(ap_, "index.sqlite")):
-        raise SystemExit("archive.path %s already holds other files; choose an empty or new directory dedicated to the archive (it is what `remove everything` deletes)" % ap_)
     save_config(cfg)
     sch = cfg["schedule"]
     sch.pop("install", None)
