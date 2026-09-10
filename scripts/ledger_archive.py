@@ -129,13 +129,16 @@ class Archive:
         if not os.path.isfile(idx):
             return False
         try:
-            db = sqlite3.connect("file:%s?mode=ro" % idx.replace("\\", "/"), uri=True)
-            cols = {r[1] for r in db.execute("PRAGMA table_info(files)")}
-            tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            from urllib.parse import quote
+            db = sqlite3.connect("file:%s?mode=ro" % quote(idx.replace("\\", "/"), safe="/:"), uri=True)
+            files_cols = {r[1] for r in db.execute("PRAGMA table_info(files)")}
+            runs_cols = {r[1] for r in db.execute("PRAGMA table_info(runs)")}
             db.close()
         except sqlite3.Error:
             return False
-        if not {"host", "path", "rel", "size", "mtime", "sha256", "archived_at"} <= cols or "runs" not in tables:
+        if not {"host", "path", "rel", "size", "mtime", "sha256", "archived_at", "versions"} <= files_cols:
+            return False
+        if not {"id", "host", "started_at", "finished_at", "files_new", "files_updated", "bytes", "note"} <= runs_cols:
             return False
         for name in os.listdir(path):
             if name in ("index.sqlite", "index.sqlite-wal", "index.sqlite-shm", "index.sqlite-journal"):
