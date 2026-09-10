@@ -62,9 +62,13 @@ def run(cmd, check=True, **kw):
     return r
 
 
-def scan_args(host):
-    """Translate a manifest host entry into compile_ai_logs.py scan arguments."""
+def scan_args(host, capture_prompts=False):
+    """Translate a manifest host entry into compile_ai_logs.py scan arguments. Prompt text is recorded only when the
+    manifest says capture_prompts: true (ledger.py writes it from the prompts.capture preference); every other scan,
+    on every host kind, runs with --no-prompts."""
     args = ["scan", "--host", safety.check_path(host["name"], "host name")]
+    if not capture_prompts:
+        args.append("--no-prompts")
     for key in ("claude_roots", "codex_roots", "copilot_roots", "opencode_dbs", "openclaw_roots", "gemini_roots", "qwen_roots", "aider_roots", "kimi_roots",
                 "vibe_roots", "continue_roots", "pi_roots", "cline_roots", "generic_roots"):
         for r in host.get(key, []):
@@ -90,20 +94,20 @@ def scan_args(host):
     return args
 
 
-def scan_host(host, scans_dir, python="python"):
+def scan_host(host, scans_dir, python="python", capture_prompts=False):
     kind = host.get("kind", "local")
     name = host["name"]
     out_dir = os.path.join(scans_dir, name)
     os.makedirs(out_dir, exist_ok=True)
     if kind == "local" or kind == "share":
-        run([safety.validate_local_python(host, python), SCANNER] + scan_args(host) + ["--out-dir", out_dir])
+        run([safety.validate_local_python(host, python), SCANNER] + scan_args(host, capture_prompts) + ["--out-dir", out_dir])
     elif kind == "wsl":
         distro, wsl_python = safety.validate_wsl_host(host)
         # the scanner and the output dir must be visible from inside the distro
         win_out = os.path.abspath(out_dir)
         wsl_out = "/mnt/" + win_out[0].lower() + win_out[2:].replace("\\", "/")
         wsl_scanner = "/mnt/" + SCANNER[0].lower() + SCANNER[2:].replace("\\", "/")
-        cmd = " ".join([shlex.quote(wsl_python), shlex.quote(wsl_scanner)] + [shlex.quote(x) for x in scan_args(host)] + ["--out-dir", shlex.quote(wsl_out)])
+        cmd = " ".join([shlex.quote(wsl_python), shlex.quote(wsl_scanner)] + [shlex.quote(x) for x in scan_args(host, capture_prompts)] + ["--out-dir", shlex.quote(wsl_out)])
         # the WSL service intermittently refuses calls under load (Wsl/Service/0x8007274c); retry before falling back,
         # because a scan over the \wsl$ share can silently miss files (9P errors) and is four times slower
         # a previous run's outputs must not be mistaken for this run's: remove them before the first attempt, so
@@ -142,14 +146,14 @@ def scan_host(host, scans_dir, python="python"):
                     except OSError as ex:
                         log("could not copy %s: %s" % (p, ex))
                 alt["opencode_dbs"] = copies
-            run([python, SCANNER] + scan_args(alt) + ["--out-dir", out_dir])
+            run([python, SCANNER] + scan_args(alt, capture_prompts) + ["--out-dir", out_dir])
     elif kind == "ssh":
         # every remote-shell word is validated against a strict grammar and quoted; the target is checked so it
         # cannot smuggle ssh/scp options
         target, remote_tmp, remote_python = safety.validate_ssh_host(host)
         run(["ssh", "-o", "BatchMode=yes", "--", target, "mkdir -p -- " + shlex.quote(remote_tmp)])
         run(["scp", "-q", "--", SCANNER, "%s:%s" % (target, shlex.quote(remote_tmp + "/compile_ai_logs.py"))])
-        cmd = " ".join([shlex.quote(remote_python), shlex.quote(remote_tmp + "/compile_ai_logs.py")] + [shlex.quote(x) for x in scan_args(host)] + ["--out-dir", shlex.quote(remote_tmp + "/out")])
+        cmd = " ".join([shlex.quote(remote_python), shlex.quote(remote_tmp + "/compile_ai_logs.py")] + [shlex.quote(x) for x in scan_args(host, capture_prompts)] + ["--out-dir", shlex.quote(remote_tmp + "/out")])
         run(["ssh", "-o", "BatchMode=yes", "--", target, cmd])
         run(["scp", "-q", "--", "%s:%s" % (target, shlex.quote(remote_tmp + "/out") + "/*"), out_dir])
     else:
@@ -231,10 +235,11 @@ def main():
         want = set(a.hosts.split(","))
         hosts = [h for h in hosts if h["name"] in want]
 
+    capture_prompts = M.get("capture_prompts") is True  # prompt text is an explicit opt-in (ledger.py prompts.capture)
     if "scan" in steps:
         for h in hosts:
-            log("scanning %s (%s)" % (h["name"], h.get("kind", "local")))
-            scan_host(h, scans, a.python)
+            log("scanning %s (%s%s)" % (h["name"], h.get("kind", "local"), "" if capture_prompts else ", prompts off"))
+            scan_host(h, scans, a.python, capture_prompts)
 
     if "report" in steps:
         cmd = [a.python, SCANNER, "report", "--out-dir", compiled, "--pricing", pricing]

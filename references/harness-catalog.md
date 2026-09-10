@@ -4,6 +4,8 @@ Where AI coding agents, IDE assistants, gateways and inference runtimes keep usa
 
 Legend for the **Scanner** column: `built-in` = `compile_ai_logs.py` has a dedicated parser; `generic` = readable with `--generic-root` (usage-object sniffing, see log-formats.md); `session-level` = only per-session totals exist; `none` = no local token data (counts of chats only); `export` = usage must be exported from the vendor.
 
+Generic sniffer boundary: `--generic-root <tool>=<dir>` reads every `.json` / `.jsonl` below `<dir>`, so `<dir>` must be the tool's own directory (`~/.config/manicode`, `~/.factory/sessions`, `~/.lmstudio/conversations`); a home directory, a drive root or a broad container such as `~`, `AppData`, `.config`, `.local/share` or `Documents` is refused by `safety.check_generic_root` before anything is opened. Files that look like credentials (`auth.json`, `*credential*`, `*token*`, `*secret*`, `*.pem`, `*.key`, `.env*`, anything under `.ssh`, `.aws` ...) are never opened; the inventory row for a sniffed root records how many were skipped (`credential_files_skipped`) and carries the note "generic usage sniffer; N credential-like files skipped; verify on a sample".
+
 `~` is each user profile on each host (`C:\Users\<u>`, `/home/<u>`, `/Users/<u>`, WSL homes, old-profile backups). `$APPDATA` = `%APPDATA%` on Windows, `~/.config` on Linux, `~/Library/Application Support` on macOS.
 
 ## Terminal coding agents

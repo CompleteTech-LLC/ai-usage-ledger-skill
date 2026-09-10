@@ -23,7 +23,7 @@ metadata:
 |---|---|
 | Usage ledger | Locate, de-duplicate, price and attribute every locally recorded AI coding-agent call on a person's machines. |
 | Starting point | Any request to count tokens, estimate API-equivalent cost, compare subscriptions, or break usage down by account, model, project or time. |
-| Operating boundary | Read-only over the tools' directories; credential files are opened only when the operator opts in, for identity claims never credentials, minimised to pseudonymous ids and plan types unless identifiable output is requested; nothing is transmitted. The ledger store is append-only: nothing already stored is edited or removed. |
+| Operating boundary | Read-only over the tools' directories; credential files are opened only when the operator opts in, for identity claims never credentials, minimised to pseudonymous ids and plan types unless identifiable output is requested; nothing is transmitted. Prompt text (what the operator typed to each agent) is recorded only when `prompts.capture` is `y`; by default the ledger holds counts, tokens, models and costs and never the words. The ledger store is append-only: nothing already stored is edited or removed. |
 
 ## Before You Start
 
@@ -139,7 +139,7 @@ Relay this table to the operator, in chat or on the terminal, before the first o
 
 | Capability | Boundary |
 |---|---|
-| Files read | Agent transcripts, tool databases and credential files under the user's own profiles and hosts named in the manifest; bundled templates, references and `assets/logo.png`. |
+| Files read | Agent transcripts, tool databases and credential files under the user's own profiles and hosts named in the manifest; prompt-only history files (Claude Code and Codex `history.jsonl`) only when `prompts.capture` is on; bundled templates, references and `assets/logo.png`. A `generic_roots` entry is read only when it names one tool's own directory (a home, drive root, `AppData`, `.config`, `Documents` or similar is refused) and credential-looking files below it (`auth.json`, `*token*`, `*.pem`, `.env*` ...) are skipped and counted in the inventory. |
 | Files written | `~/.ai-usage-ledger/` (or `$AI_USAGE_LEDGER_HOME`): `config.json`, the store, generated `manifest.json`, `accounts.json`, `pricing.json`, `report_config.json`, `anonymize-map.json`, `run-ledger.cmd|sh`, `logs/`, and `archive/` when raw-log archiving is on (size of the tools' log trees, roughly one tenth when compressed); `scans/`, `compiled/`, `store-export/`, `reports/`, `anonymized/` and `documents/` under the chosen `workdir`; `tests/fixtures`, `tests/out` during the test suites. |
 | Local commands | `python3` for the scripts; `wsl.exe -l -q` to list distros during detection; `wsl.exe`, `ssh` and `scp` only for hosts in the manifest; `schtasks` or `crontab` only when the operator asks for a scheduled refresh (`schedule install|remove`), never silently. |
 | Not required | Outbound network access (pricing pages are fetched by the operator, not the scripts), credential use, persistence, privilege escalation, destructive file operations, background services. |
@@ -177,6 +177,7 @@ Relay this table to the operator, in chat or on the terminal, before the first o
 | `workdir`, `timezone` | Paths and IANA zone. |
 | `detect.all_profiles`, `detect.wsl` | `y` / `n`. |
 | `anonymize.on_every_run` | `y` / `n`: also build `<workdir>/anonymized/` on every run. |
+| `prompts.capture` | `y` / `n` (default `n`): store the text of typed prompts so `query prompts` / `prompt-count` can search it. Off, the scanners run with `--no-prompts`: no `prompts.<host>.jsonl` is written, prompt-only history files are not opened, the store's `prompts` table stays empty and those queries say so. |
 | `accounts.from_credentials`, `accounts.identifiable` | `y` / `n`: read credential files for account ids and plans (default `n`: per-host placeholders to fill in); keep e-mails and organisation names (default `n`: pseudonymous ids). |
 | `archive.raw_logs`, `archive.compress`, `archive.path` | `y` / `n` keep the raw log files; `y` / `n` gzip them (`n` keeps them re-scannable in place); directory (default `~/.ai-usage-ledger/archive`). |
 | `schedule.frequency`, `schedule.time`, `schedule.weekday`, `schedule.expires` | `none` / `daily` / `weekly` / `monthly`; `HH:MM`; `mon`..`sun`; optional `YYYY-MM-DD` after which the scheduled run removes itself. Preferences only: nothing is registered until `schedule install` is confirmed. |
@@ -271,7 +272,7 @@ Accounts in `query` come from the same `accounts.json` rules the report uses (`a
 
 ## Definitions
 
-`input_uncached` fresh prompt tokens · `cache_read` served from cache · `cache_write` written to cache (Anthropic, split 5m/1h) · `output` incl. reasoning · `total` = sum. API-equivalent = tokens × list price. Cache saving = same call priced with all prompt tokens uncached, minus actual. Subscription months are counted only when that account made a call. Usage-based calls are real spend and stay out of the subscription comparison.
+`input_uncached` fresh prompt tokens · `cache_read` served from cache · `cache_write` written to cache (Anthropic, split 5m/1h) · `output` incl. reasoning · `total` = sum. API-equivalent = tokens × list price. Cache saving = same call priced with all prompt tokens uncached, minus actual. Subscription months are counted only when that account made a call. Usage-based calls are real spend and stay out of the subscription comparison. Typed prompts = the operator's own messages; their text enters the store only under `prompts.capture=y`, otherwise the prompt count is 0 and `all_prompts.*` are empty.
 
 ## Network Boundary
 
