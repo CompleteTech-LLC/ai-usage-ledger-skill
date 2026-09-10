@@ -35,6 +35,7 @@ SSH_TARGET_RE = re.compile(r"^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9][A-Za-z0-9._-]*$")
 REMOTE_PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
 INTERPRETER_RE = re.compile(r"^(?:python3?(?:\.\d+)?|/[A-Za-z0-9._/-]+/python3?(?:\.\d+)?)$")
 DISTRO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+PYTHON_BASENAME_RE = re.compile(r"^python(?:3(?:\.\d+)?)?w?(?:\.exe)?$", re.IGNORECASE)
 COLOR_RE = re.compile(r"^(?:#[0-9A-Fa-f]{3,8}|[A-Za-z]{3,30}|(?:rgb|rgba|hsl|hsla)\([0-9.,%\s]+\))$")
 CSS_TOKEN_NAME_RE = re.compile(r"^[a-z0-9-]{1,40}$")
 CSS_TOKEN_VALUE_RE = re.compile(r"^[A-Za-z0-9#%.,()\s'\"-]{1,120}$")
@@ -74,6 +75,20 @@ def validate_ssh_host(host):
     if not INTERPRETER_RE.match(python):
         raise UnsafeValue("python must be python3, python, python3.N or an absolute path to one: %r" % python)
     return target, remote_tmp, python
+
+
+def validate_local_python(host, default):
+    """local/share hosts launch this interpreter directly, so a manifest-supplied value selects the executable.
+    The default comes from --python (this process), never from the manifest."""
+    raw = host.get("python")
+    if not raw:
+        return default
+    python = check_path(str(raw), "python")
+    if not PYTHON_BASENAME_RE.match(os.path.basename(python)):
+        raise UnsafeValue("python must name a python interpreter: %r" % python)
+    if (os.sep in python or "/" in python) and not os.path.isfile(os.path.realpath(python)):
+        raise UnsafeValue("python does not exist: %r" % python)
+    return python
 
 
 def validate_wsl_host(host):

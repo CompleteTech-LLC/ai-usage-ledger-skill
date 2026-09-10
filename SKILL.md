@@ -150,7 +150,7 @@ metadata:
 
 | Preference key (`--set`) | Values |
 |---|---|
-| `brand.name`, `brand.eyebrow`, `brand.tagline`, `brand.contact`, `brand.logo`, `brand.accent`, `brand.footer` | Free text; logo is a PNG/SVG path or URL; accent is hex. |
+| `brand.name`, `brand.eyebrow`, `brand.tagline`, `brand.contact`, `brand.logo`, `brand.accent`, `brand.footer` | Free text; the logo is a local PNG/SVG path, inlined as a data URI (a URL is used only with `allow_external_resources: true`); accent is hex. |
 | `theme` | `light`, `dark`, `system` (initial theme of both pages; the viewer's toggle still wins). |
 | `store.kind` | `sqlite` (one file, indexed), `json` (JSONL files plus id index), `csv` (CSV files plus id index). |
 | `workdir`, `timezone` | Paths and IANA zone. |

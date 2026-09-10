@@ -84,7 +84,7 @@ def scan_host(host, scans_dir, python="python"):
     out_dir = os.path.join(scans_dir, name)
     os.makedirs(out_dir, exist_ok=True)
     if kind == "local" or kind == "share":
-        run([host.get("python", python), SCANNER] + scan_args(host) + ["--out-dir", out_dir])
+        run([safety.validate_local_python(host, python), SCANNER] + scan_args(host) + ["--out-dir", out_dir])
     elif kind == "wsl":
         distro, wsl_python = safety.validate_wsl_host(host)
         # the scanner and the output dir must be visible from inside the distro
@@ -181,8 +181,8 @@ def main():
     ap.add_argument("--hosts", default=None, help="comma list of host names to scan (default all)")
     ap.add_argument("--python", default=sys.executable)
     a = ap.parse_args()
+    safety.refuse_if_shared(a.manifest, "pipeline manifest")
     M = json.load(open(a.manifest, encoding="utf-8"))
-    safety.warn_if_writable(a.manifest, log)
     steps = set(a.only.split(","))
     mdir0 = os.path.dirname(os.path.abspath(a.manifest))
     work = os.path.abspath(os.path.join(mdir0, M.get("workdir", ".")))
