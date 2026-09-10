@@ -48,6 +48,8 @@ The audit of 1.5.1 asked for neutral default branding, containment and remote-co
 
 The audit of 1.5.4 flagged credential-file access and retention of e-mails and organisation names. 1.5.5 makes credential reads an explicit onboarding opt-in preceded by a warning that names the files and fields, keeps only the claims needed for attribution and pricing (pseudonymous account ids and plan types unless identifiable output is requested), drops the credential object immediately after extraction, labels packages that carry account metadata with `SENSITIVITY.md`, and adds `ledger.py publish-check` as a pre-publication identity scan.
 
+The audit of 1.5.5 classified the optional scheduled task as cross-session persistence (T06). 1.5.6 separates it from onboarding entirely (no configuration key can register it), requires a typed confirmation or an operator-written consent record tied to a hash of the exact configuration (wrapper, schedule, hosts, roots, flags), demands a second acknowledgement for high-impact schedules (raw-log archive, SSH, WSL, other profiles), discloses everything including storage impact and the removal command before asking, warns about entries it will replace, and adds an optional expiry after which the scheduled run removes itself.
+
 ## Local Readiness Check
 
 Run before publishing:

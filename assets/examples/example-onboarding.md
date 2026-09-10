@@ -34,7 +34,6 @@ Compress the archive with gzip? (y/n; n keeps files re-scannable in place) [y]: 
 Refresh automatically? (none / daily / weekly / monthly) [none]: daily
 At what local time? (HH:MM) [03:00]: 03:00
 Weekday for a weekly refresh (mon..sun) [mon]: mon
-Install the scheduled task / cron entry now? (y/n) [n]: n
 
 Detecting agent logs on this machine and its WSL distros...
   [workstation] Codex: /home/<you>/.codex; Claude Code: /home/<you>/.claude; Copilot CLI: /home/<you>/.copilot; opencode: /home/<you>/.local/share/opencode/opencode.db; cline: /home/<you>/.config/Code/User/globalStorage/saoudrizwan.claude-dev
@@ -46,7 +45,7 @@ Accounts drafted (from credential files):
   claude:example               example@example.com                Claude Max 20x
 Add an SSH host to scan? (user@host or blank) []: ops@build.northwind.example
 Add another SSH host? (user@host or blank) []: 
-Scheduled refresh preference saved (daily at 03:00); install it with: python3 scripts/ledger.py schedule install
+Scheduled refresh preference saved (daily at 03:00). Nothing was registered: onboarding never installs persistence. When you are ready, run `python3 scripts/ledger.py schedule install`; it shows exactly what will run and asks you to confirm (remove later with `schedule remove`).
 
 Saved preferences to ~/.ai-usage-ledger/config.json
 Store: sqlite at ~/.ai-usage-ledger/ledger.sqlite
@@ -59,7 +58,7 @@ The saved preferences (`~/.ai-usage-ledger/config.json`, salt omitted):
 ```json
 {
   "version": 1,
-  "initialized_at": "2026-09-10T01:50:40+00:00",
+  "initialized_at": "2026-09-10T02:11:48+00:00",
   "home": "~/.ai-usage-ledger",
   "store": {
     "kind": "sqlite",
@@ -131,9 +130,12 @@ python3 scripts/ledger.py init --yes \
   --set brand.accent=#1E3A8A --set theme=system --set store.kind=sqlite --set timezone=America/New_York \
   --set detect.all_profiles=y --set detect.wsl=y --set accounts.from_credentials=y --set accounts.identifiable=n \
   --set anonymize.on_every_run=y --set archive.raw_logs=y \
-  --set schedule.frequency=daily --set schedule.time=03:00 --set schedule.install=n
+  --set schedule.frequency=daily --set schedule.time=03:00
 python3 scripts/ledger.py run
 ```
 
-Pass `--set schedule.install=y` only after the operator has agreed to a Task Scheduler task or crontab entry being
-created; `python3 scripts/ledger.py schedule install --dry-run` prints the exact command first.
+Onboarding never registers a scheduled task. `python3 scripts/ledger.py schedule install` shows the wrapper, the hosts
+and roots it will read, the archive and anonymise flags, the output directories and the storage used so far, then asks
+for a typed confirmation (a second one when the schedule is high-impact: raw-log archive, SSH, WSL or other profiles).
+Without a terminal, `schedule consent` prints the JSON consent record (with a hash of that exact configuration) for the
+operator to write to `~/.ai-usage-ledger/schedule-consent.json`; install refuses if the configuration changed since.

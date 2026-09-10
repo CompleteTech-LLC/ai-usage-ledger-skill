@@ -145,7 +145,6 @@ QUESTIONS = [
     ("schedule.frequency", "Refresh automatically? (none / daily / weekly / monthly)", lambda c: c["schedule"]["frequency"], ["none", "daily", "weekly", "monthly"]),
     ("schedule.time", "At what local time? (HH:MM)", lambda c: c["schedule"]["time"], None),
     ("schedule.weekday", "Weekday for a weekly refresh (mon..sun)", lambda c: c["schedule"]["weekday"], sorted(schedule.WEEKDAYS)),
-    ("schedule.install", "Install the scheduled task / cron entry now? (y/n)", lambda c: "y" if c["schedule"].get("install") else "n", ["y", "n"]),
 ]
 
 
@@ -189,7 +188,7 @@ def set_dotted(cfg, key, value):
     elif key == "archive.path":
         cfg.setdefault("archive", {})["path"] = value
     elif key == "schedule.install":
-        cfg.setdefault("schedule", {})["install"] = value in ("y", "yes", "true", True)
+        sys.stderr.write("schedule.install is ignored: onboarding never registers a scheduled task; run `ledger.py schedule install` and confirm there.\n")
     elif key.startswith("schedule."):
         cfg.setdefault("schedule", {})[key[9:]] = value
     else:
@@ -257,15 +256,11 @@ def onboard(args):
     cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon", "install": False, "installed_at": None})
     save_config(cfg)
     sch = cfg["schedule"]
-    if sch.get("install") and sch.get("frequency", "none") != "none":
-        rc = schedule.install(home_dir(), sys.executable, sch["frequency"], sch.get("time", "03:00"), sch.get("weekday", "mon"),
-                              ["anonymize"] if cfg["anonymize"].get("on_every_run") else [])
-        sch["installed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds") if rc == 0 else None
-        sch["install"] = False  # one-shot; the saved frequency documents what is installed
-        save_config(cfg)
-        print("Scheduled refresh: %s at %s (%s)" % (sch["frequency"], sch.get("time"), "installed" if rc == 0 else "FAILED to install; run `ledger.py schedule install`"))
-    elif sch.get("frequency", "none") != "none":
-        print("Scheduled refresh preference saved (%s at %s); install it with: python3 scripts/ledger.py schedule install" % (sch["frequency"], sch.get("time")))
+    sch.pop("install", None)
+    if sch.get("frequency", "none") != "none":
+        print("Scheduled refresh preference saved (%s at %s). Nothing was registered: onboarding never installs persistence. "
+              "When you are ready, run `python3 scripts/ledger.py schedule install`; it shows exactly what will run and asks you to confirm "
+              "(remove later with `schedule remove`)." % (sch["frequency"], sch.get("time")))
     st = ledger_store.Store.open(cfg["store"]["kind"], cfg["store"]["path"])
     for k, v in cfg.items():
         st.set_pref(k, v)
@@ -339,6 +334,12 @@ def filter_manifest(src, dst, only=None, skip=None):
 
 
 def do_run(args):
+    if getattr(args, "until", None) and datetime.now().strftime("%Y-%m-%d") > args.until:
+        if os.path.isfile(schedule.consent_path(home_dir())):
+            print("scheduled run expired on %s; removing the schedule" % args.until)
+            return schedule.remove(home_dir())
+        print("scheduled run expired on %s; nothing to do (no schedule consent recorded for %s)" % (args.until, home_dir()))
+        return 0
     cfg = load_config()
     if cfg is None:
         raise SystemExit("No configuration at %s. Run `python3 scripts/ledger.py init` first (interactive), or `init --yes` for neutral defaults; "
@@ -495,8 +496,9 @@ def do_status(args):
     print("workdir:  %s" % cfg["workdir"])
     print("brand:    %s · %s · accent %s · theme %s" % (cfg["branding"].get("name"), cfg["branding"].get("tagline"), cfg["branding"].get("accent"), cfg.get("theme")))
     sch = cfg.get("schedule") or {}
-    print("schedule: %s%s" % (sch.get("frequency", "none"), (" at %s" % sch.get("time")) if sch.get("frequency", "none") != "none" else ""))
+    print("schedule: %s%s%s" % (sch.get("frequency", "none"), (" at %s" % sch.get("time")) if sch.get("frequency", "none") != "none" else "", (" (consented %s)" % sch.get("installed_at")) if sch.get("installed_at") else ""))
     schedule.status(home_dir())
+    print("          remove with: python3 scripts/ledger.py schedule remove")
     print("anonymise on every run: %s" % ("yes" if (cfg.get("anonymize") or {}).get("on_every_run") else "no"))
     arc = cfg.get("archive") or {}
     if arc.get("raw_logs"):
@@ -546,11 +548,26 @@ def do_schedule(args):
             freq = "daily"
         t = args.time or sch.get("time") or "03:00"
         wd = args.weekday or sch.get("weekday") or "mon"
-        rc = schedule.install(home_dir(), sys.executable, freq, t, wd, ["anonymize"] if cfg.get("anonymize", {}).get("on_every_run") else [], args.dry_run)
+        flags = ["anonymize"] if cfg.get("anonymize", {}).get("on_every_run") else []
+        if cfg.get("archive", {}).get("raw_logs"):
+            flags.append("archive")
+        expires = args.expires or sch.get("expires")
+        rc = schedule.install(home_dir(), sys.executable, freq, t, wd, flags, args.dry_run, expires, cfg.get("manifest_path"), cfg.get("workdir"))
         if rc == 0 and not args.dry_run:
-            sch.update({"frequency": freq, "time": t, "weekday": wd, "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+            sch.update({"frequency": freq, "time": t, "weekday": wd, "expires": expires, "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "consent": os.path.join(home_dir(), schedule.CONSENT_FILE)})
             save_config(cfg)
         return rc
+    if args.action == "consent":
+        flags = ["anonymize"] if cfg.get("anonymize", {}).get("on_every_run") else []
+        if cfg.get("archive", {}).get("raw_logs"):
+            flags.append("archive")
+        freq = args.frequency or sch.get("frequency") or "daily"
+        mat = schedule.material_config(home_dir(), sys.executable, freq if freq != "none" else "daily", args.time or sch.get("time") or "03:00", args.weekday or sch.get("weekday") or "mon", flags, args.expires or sch.get("expires"), cfg.get("manifest_path"))
+        print(schedule.disclosure(home_dir(), mat, cfg.get("workdir")))
+        print(json.dumps({"approved_by": "<your name>", "approved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "config_hash": schedule.config_hash(mat), "sensitive_acknowledged": bool(schedule.sensitive_reasons(mat))}, indent=2))
+        print("write that JSON to %s to consent without a terminal, then run `schedule install`" % schedule.consent_path(home_dir()))
+        return 0
     if args.action == "remove":
         rc = schedule.remove(home_dir(), args.dry_run)
         if rc == 0 and not args.dry_run:
@@ -696,6 +713,7 @@ def main():
     r.add_argument("--no-detect", action="store_true", help="do not refresh the manifest from detection")
     r.add_argument("--anonymize", action="store_true", help="also build the anonymised copy under <workdir>/anonymized")
     r.add_argument("--archive", action="store_true", help="also archive the raw log files this once (archive.raw_logs=y does it every run)")
+    r.add_argument("--until", help="YYYY-MM-DD: used by scheduled wrappers; after this date the run does nothing and removes the schedule")
     r.set_defaults(fn=do_run)
     s = sub.add_parser("status")
     s.set_defaults(fn=do_status)
@@ -706,7 +724,8 @@ def main():
     e.add_argument("--anonymize", action="store_true", help="pseudonymise hosts, sessions, projects and accounts; drop paths")
     e.set_defaults(fn=do_export)
     sc = sub.add_parser("schedule", help="install, remove or show the scheduled refresh (Task Scheduler / cron)")
-    sc.add_argument("action", choices=["install", "remove", "status"])
+    sc.add_argument("action", choices=["install", "remove", "status", "consent"])
+    sc.add_argument("--expires", help="YYYY-MM-DD after which the scheduled run stops and removes the entry")
     sc.add_argument("--frequency", choices=["daily", "weekly", "monthly"])
     sc.add_argument("--time", help="HH:MM local time")
     sc.add_argument("--weekday", choices=sorted(schedule.WEEKDAYS))

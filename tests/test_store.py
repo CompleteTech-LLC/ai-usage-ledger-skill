@@ -159,11 +159,17 @@ def check_cli(scan_dir):
     print("anon export: %s" % ("OK" if good else "FAIL"))
     ok = ok and good
     # schedule: dry run only (never installs anything on the test machine)
+    s0 = run([py, ledger, "schedule", "install", "--frequency", "weekly", "--time", "04:15", "--weekday", "fri", "--dry-run"], env=env)
+    unconsented = s0.returncode == 3 and "Not installed" in s0.stdout
+    c = run([py, ledger, "schedule", "consent", "--frequency", "weekly", "--time", "04:15", "--weekday", "fri"], env=env)
+    rec = json.loads(c.stdout[c.stdout.rfind("{"):c.stdout.rfind("}") + 1])
+    rec["approved_by"] = "test"
+    json.dump(rec, open(os.path.join(home, "schedule-consent.json"), "w", encoding="utf-8"))
     s1 = run([py, ledger, "schedule", "install", "--frequency", "weekly", "--time", "04:15", "--weekday", "fri", "--dry-run"], env=env)
     s2 = run([py, ledger, "schedule", "remove", "--dry-run"], env=env)
     good = ("schtasks" in s1.stdout or "crontab" in s1.stdout) and ("04:15" in s1.stdout or "15 4" in s1.stdout) and ("FRI" in s1.stdout or "* * 5" in s1.stdout) and ("schtasks" in s2.stdout or "crontab" in s2.stdout)
     cfg2 = json.load(open(os.path.join(home, "config.json"), encoding="utf-8"))
-    good = good and cfg2.get("schedule", {}).get("frequency") == "none"  # dry run must not change the saved preference
+    good = good and unconsented and cfg2.get("schedule", {}).get("frequency") == "none"  # dry run must not change the saved preference
     print("schedule dry-run: %s" % ("OK" if good else "FAIL\n" + s1.stdout + s2.stdout))
     ok = ok and good
     # documents: every template renders with no ledger placeholder left; user-only placeholders may remain

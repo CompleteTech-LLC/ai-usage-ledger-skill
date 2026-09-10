@@ -161,7 +161,7 @@ def check_wrapper():
     r = run([PY, os.path.join(SCRIPTS, "schedule.py"), "--home", home, "install", "--extra-args", "--x", "--dry-run"])
     no_extra = r.returncode != 0 and "extra-args" in (r.stderr + r.stdout)
     r2 = run([PY, os.path.join(SCRIPTS, "schedule.py"), "--home", home, "install", "--frequency", "daily", "--time", "03:00", "--anonymize", "--dry-run"])
-    dry = r2.returncode == 0 and "will contain" in r2.stdout and not os.path.exists(os.path.join(OUT, "pwned"))
+    dry = r2.returncode == 3 and "wrapper" in r2.stdout and "Not installed" in r2.stdout and not os.path.exists(os.path.join(OUT, "pwned"))
     mode_ok = True
     if not schedule.IS_WIN:
         p = schedule.write_wrapper(home, PY, ["anonymize"])
@@ -206,6 +206,58 @@ def check_branding_and_pages(compiled):
     print("branding:  " + "; ".join("%s %s (%s)" % (lb, "ok" if g else "FAIL", d) for lb, g, d in results) + "  %s" % ("OK" if good else "FAIL"))
     if r.returncode or r2.returncode:
         print(r.stderr[-400:], r2.stderr[-400:])
+    return good
+
+
+def check_persistence_consent():
+    """Persistence can never come from configuration alone: onboarding does not install, install needs a matching consent."""
+    import tempfile
+    home = tempfile.mkdtemp(prefix="ledger-sched-")
+    env = dict(os.environ, AI_USAGE_LEDGER_HOME=home)
+    ledger = os.path.join(SCRIPTS, "ledger.py")
+    r1 = run([PY, ledger, "init", "--yes", "--set", "detect.wsl=n", "--set", "detect.all_profiles=n", "--set", "schedule.frequency=daily", "--set", "schedule.time=04:30", "--set", "schedule.install=y"], env=env)
+    onboarding_safe = r1.returncode == 0 and "Nothing was registered" in r1.stdout and "ignored" in r1.stderr and not os.path.exists(os.path.join(home, "schedule-consent.json")) and not os.path.exists(os.path.join(home, "run-ledger.cmd")) and not os.path.exists(os.path.join(home, "run-ledger.sh"))
+    r2 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)  # no terminal, no consent
+    refused = r2.returncode == 3 and "Not installed" in r2.stdout and "The scheduled entry will run" in r2.stdout and "schedule remove" in r2.stdout and ("schtasks" not in r2.stdout and "crontab line" not in r2.stdout)
+    # a consent for a different configuration is rejected
+    json.dump({"approved_by": "test", "approved_at": "2026-01-01T00:00:00+00:00", "config_hash": "0000000000000000", "sensitive_acknowledged": False}, open(os.path.join(home, "schedule-consent.json"), "w", encoding="utf-8"))
+    r3 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)
+    stale = r3.returncode == 3 and "changed since consent" in r3.stdout
+    # the consent printed by `schedule consent`, written by the operator, is accepted
+    c = run([PY, ledger, "schedule", "consent"], env=env)
+    rec = json.loads(c.stdout[c.stdout.rfind("{"):c.stdout.rfind("}") + 1])
+    rec["approved_by"] = "test"
+    json.dump(rec, open(os.path.join(home, "schedule-consent.json"), "w", encoding="utf-8"))
+    r4 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)
+    accepted = r4.returncode == 0 and "consent: consented" in r4.stdout and ("schtasks" in r4.stdout or "crontab line" in r4.stdout) and "04:30" in r4.stdout
+    # high-impact schedule (raw-log archive) needs the separate acknowledgement
+    run([PY, ledger, "init", "--yes", "--set", "archive.raw_logs=y"], env=env)
+    r5 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)
+    sensitive_refused = r5.returncode == 3 and ("changed since consent" in r5.stdout or "high-impact" in r5.stdout) and "HIGH-IMPACT" in r5.stdout
+    c2 = run([PY, ledger, "schedule", "consent"], env=env)
+    rec2 = json.loads(c2.stdout[c2.stdout.rfind("{"):c2.stdout.rfind("}") + 1])
+    rec2["approved_by"] = "test"
+    rec2["sensitive_acknowledged"] = False
+    json.dump(rec2, open(os.path.join(home, "schedule-consent.json"), "w", encoding="utf-8"))
+    r6 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)
+    unacked = r6.returncode == 3 and "did not acknowledge" in r6.stdout
+    rec2["sensitive_acknowledged"] = True
+    json.dump(rec2, open(os.path.join(home, "schedule-consent.json"), "w", encoding="utf-8"))
+    r7 = run([PY, ledger, "schedule", "install", "--dry-run", "--expires", "2099-12-31"], env=env)
+    # a different expiry changes the material configuration, so it must be re-consented; the same one passes
+    expiry_changes = r7.returncode == 3 and "changed since consent" in r7.stdout
+    r8 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)
+    acked = r8.returncode == 0 and "--archive" in r8.stdout
+    # an expired scheduled run does nothing and never touches a scheduler entry it did not consent to
+    os.remove(os.path.join(home, "schedule-consent.json"))
+    r9 = run([PY, ledger, "run", "--until", "2000-01-01"], env=env)
+    expired = r9.returncode == 0 and "expired" in r9.stdout and "nothing to do" in r9.stdout
+    good = onboarding_safe and refused and stale and accepted and sensitive_refused and unacked and expiry_changes and acked and expired
+    print("persistence: onboarding never installs %s, no-consent refused %s, stale consent refused %s, matching consent accepted %s, high-impact refused %s / unacknowledged %s / acknowledged %s, expiry re-consent %s, expired run inert %s  %s" % (
+        onboarding_safe, refused, stale, accepted, sensitive_refused, unacked, acked, expiry_changes, expired, "OK" if good else "FAIL"))
+    if not good:
+        print(r1.stdout[-300:], r1.stderr[-200:], r2.stdout[-300:], r3.stdout[-200:], r4.stdout[-300:], r5.stdout[-200:], r6.stdout[-200:], r7.stdout[-200:], r8.stdout[-200:], r9.stdout[-200:])
+    shutil.rmtree(home, ignore_errors=True)
     return good
 
 
@@ -415,6 +467,7 @@ def main():
     ok = check_examples_self_contained() and ok
     ok = check_neutral_branding() and ok
     ok = check_credential_minimisation() and ok
+    ok = check_persistence_consent() and ok
     ok = check_archive_boundaries() and ok
     ok = check_private_permissions() and ok
     print("SECURITY OK" if ok else "SECURITY CHECKS FAILED")

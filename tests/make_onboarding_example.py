@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 ANSWERS = [
     "none",
     "Northwind Trading Co.", "NORTHWIND TRADING CO.", "Ship it, measure it", "northwind.example · ops@northwind.example", "",
-    "#1E3A8A", "Northwind Trading Co. · internal ledger", "system", "sqlite", "", "America/New_York", "y", "y", "y", "n", "y", "y", "y", "daily", "03:00", "mon", "n",
+    "#1E3A8A", "Northwind Trading Co. · internal ledger", "system", "sqlite", "", "America/New_York", "y", "y", "y", "n", "y", "y", "y", "daily", "03:00", "mon",
     "ops@build.northwind.example", "",  # one SSH host, then stop
 ]
 
@@ -107,12 +107,15 @@ python3 scripts/ledger.py init --yes \\
   --set brand.accent=#1E3A8A --set theme=system --set store.kind=sqlite --set timezone=America/New_York \\
   --set detect.all_profiles=y --set detect.wsl=y --set accounts.from_credentials=y --set accounts.identifiable=n \\
   --set anonymize.on_every_run=y --set archive.raw_logs=y \\
-  --set schedule.frequency=daily --set schedule.time=03:00 --set schedule.install=n
+  --set schedule.frequency=daily --set schedule.time=03:00
 python3 scripts/ledger.py run
 ```
 
-Pass `--set schedule.install=y` only after the operator has agreed to a Task Scheduler task or crontab entry being
-created; `python3 scripts/ledger.py schedule install --dry-run` prints the exact command first.
+Onboarding never registers a scheduled task. `python3 scripts/ledger.py schedule install` shows the wrapper, the hosts
+and roots it will read, the archive and anonymise flags, the output directories and the storage used so far, then asks
+for a typed confirmation (a second one when the schedule is high-impact: raw-log archive, SSH, WSL or other profiles).
+Without a terminal, `schedule consent` prints the JSON consent record (with a hash of that exact configuration) for the
+operator to write to `~/.ai-usage-ledger/schedule-consent.json`; install refuses if the configuration changed since.
 """ % (transcript, cfg_txt)
     dst = os.path.join(ROOT, "assets", "examples", "example-onboarding.md")
     with open(dst, "w", encoding="utf-8", newline="\n") as fh:

@@ -13,7 +13,7 @@ Part of the CompleteTech LLC agentic services skill library. Where the `agentic-
 ## OpenClaw / ClawHub Metadata
 
 - Skill key: `ai-usage-ledger`
-- Version-ready metadata: `1.5.5`
+- Version-ready metadata: `1.5.6`
 - Homepage: https://github.com/CompleteTech-LLC/ai-usage-ledger-skill
 - README: https://github.com/CompleteTech-LLC/ai-usage-ledger-skill#readme
 - Runtime binaries: `python3`
@@ -153,6 +153,7 @@ The committed examples use synthetic fixture data only; no real account or trans
 
 - Configuration files (manifest, config, accounts, pricing, report config) are trusted input that names hosts to reach and text to render; keep them owner-writable (the scripts warn otherwise).
 - No shell is ever handed a string: local commands are argument lists, the CSV merge sort is Python, and every word sent to an SSH or WSL shell is validated against a strict grammar and quoted (`scripts/safety.py`).
+- Persistence is never registered by onboarding or by a configuration key: `schedule install` shows the wrapper, the hosts and roots it will read, the archive and anonymise flags, the output directories and the storage used so far, then needs a typed confirmation (a second one for high-impact schedules) or an operator-written consent record tied to a hash of that exact configuration; `--expires` makes the entry remove itself; `schedule remove` is printed everywhere it matters.
 - The scheduler wrapper carries fixed flags only, is written with mode 0700 on POSIX, and its contents are printed before anything is registered.
 - Branding is HTML-escaped and validated; logos are inlined from local files; generated pages carry a Content-Security-Policy and load nothing from the network unless `allow_external_resources` is set.
 - Reports are neutral unless the operator chooses branding (a preset must be selected explicitly); an unconfigured `run` refuses rather than onboarding with defaults.
