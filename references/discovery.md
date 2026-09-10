@@ -78,7 +78,10 @@ import json, base64
 d = json.load(open(path)); t = d.get("tokens", {}); tok = t.get("id_token") or t.get("access_token")
 p = tok.split(".")[1]; p += "=" * (-len(p) % 4); c = json.loads(base64.urlsafe_b64decode(p))
 auth = c.get("https://api.openai.com/auth", {}); prof = c.get("https://api.openai.com/profile", {})
-print(prof.get("email"), auth.get("chatgpt_plan_type"), auth.get("chatgpt_account_id")[:8], [o.get("title") for o in auth.get("organizations", [])], d.get("last_refresh"))
+identifiable = False  # set True only when accounts.identifiable is on; otherwise keep the check pseudonymous
+print(auth.get("chatgpt_plan_type"), (auth.get("chatgpt_account_id") or "")[:8], d.get("last_refresh"))
+if identifiable:
+    print(prof.get("email"), [o.get("title") for o in auth.get("organizations", [])])
 ```
 
 Claude: `~/.claude.json` → `oauthAccount.emailAddress`, `organizationType`, `organizationRateLimitTier`, `subscriptionCreatedAt`; `~/.claude/.credentials.json` → `claudeAiOauth.subscriptionType`, `rateLimitTier`.

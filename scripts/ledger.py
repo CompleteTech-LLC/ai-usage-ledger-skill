@@ -164,7 +164,7 @@ def default_config():
         "version": CONFIG_VERSION, "initialized_at": None, "home": home_dir(),
         "store": {"kind": "sqlite", "path": os.path.join(home_dir(), "ledger.sqlite")},
         "workdir": os.path.join(home_dir(), "ledger"), "timezone": local_tz_name(), "theme": "system",
-        "branding": dict(DEFAULT_BRAND), "detect": {"all_profiles": False, "wsl": True, "on_every_run": True},
+        "branding": dict(DEFAULT_BRAND), "detect": {"all_profiles": False, "wsl": False, "on_every_run": True},
         "pricing_path": os.path.join(home_dir(), "pricing.json"), "accounts_path": os.path.join(home_dir(), "accounts.json"),
         "report_config_path": os.path.join(home_dir(), "report_config.json"), "manifest_path": os.path.join(home_dir(), "manifest.json"),
         "package_prefix": "AI_Usage_Ledger", "extra_hosts": [],
@@ -233,7 +233,7 @@ def migrate_config(cfg):
     cfg.setdefault("prompts", {"capture": False})  # pre-1.5.8 home: prompt text was never consented to, so it stays off
     cfg.setdefault("archive", {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")})
     cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon", "installed_at": None})
-    cfg.setdefault("detect", {"all_profiles": False, "wsl": True, "on_every_run": True})
+    cfg.setdefault("detect", {"all_profiles": False, "wsl": False, "on_every_run": True})
     cfg.setdefault("branding", dict(DEFAULT_BRAND))
     cfg.setdefault("extra_hosts", [])
     return cfg

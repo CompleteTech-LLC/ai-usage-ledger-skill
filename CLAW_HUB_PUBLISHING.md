@@ -52,6 +52,8 @@ The audit of 1.5.5 classified the optional scheduled task as cross-session persi
 
 Codex's review of the 1.5.6 branch added: scheduled runs pinned to the consented manifest and flags (`run --scheduled`), DOCX and PDF inspected by `publish-check` (or reported unscannable), legacy credential-derived `accounts.json` redrafted under the recorded preference, placeholder accounts billed as unknown rather than subscription, report and dashboard narrative reflecting how accounts were drafted, `SHA256SUMS` covering optional package files, short host and organisation names still checked, and the scheduler lookup deferred until after consent.
 
+The audit of 1.5.7 (one A.I.G warning, 26 SkillSpector findings) was split into issues #11 to #20 and resolved in 1.5.8: `study_url` validated to HTTPS and rendered through DOM APIs; prompt text capture an explicit opt-in (default off); the generic JSON sniffer refuses broad roots and skips credential-like files; narrowed trigger phrases and a Before You Start disclosure; authorization and minimisation boundaries in the discovery guide and templates; a sensitivity notice in every study package with paths redacted from `ledger.json` unless requested; private permissions for every generated run file; no catch-all attribution rules (unmatched calls are reported as unattributed); subprocess and data text cleaned before printing; one credential-file predicate applied to every archive path including legacy rows; WSL discovery default off; SSH transfers disclosed explicitly.
+
 ## Local Readiness Check
 
 Run before publishing:
