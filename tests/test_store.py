@@ -7,7 +7,8 @@ Store, onboarding and end-to-end `ledger run` checks on the synthetic fixtures.
 Covers: every backend (sqlite, json, csv) ingests the fixture scan once and skips it entirely the second
 time; exported events reproduce the scanner totals; `ledger.py init --yes` writes a config, manifest and
 accounts draft without prompting; `ledger.py run --no-detect` scans the fixture host into the store and
-renders the dashboard and study; a second run adds nothing; `status` and `export` work; `run --anonymize`
+renders the dashboard and study; a second run adds nothing; prompt text stays out of the store until `prompts.capture=y`
+is set (then the fixture prompts are captured); `status` and `export` work; `run --anonymize`
 produces a copy with no real host, path or account label in it; `schedule install --dry-run` prints the
 platform command without installing; every catalog template renders with no ledger placeholder left.
 """
@@ -85,12 +86,16 @@ def check_cli(scan_dir):
     cfg = json.load(open(os.path.join(home, "config.json"), encoding="utf-8"))
     ok = cfg["store"]["kind"] == "json" and cfg["branding"]["name"] == "Fixture Co" and os.path.isfile(cfg["manifest_path"]) and os.path.isfile(cfg["accounts_path"]) and os.path.isfile(cfg["pricing_path"])
     print("init:    config %s, store %s, brand %s  %s" % (os.path.basename(home), cfg["store"]["kind"], cfg["branding"]["name"], "OK" if ok else "FAIL"))
-    # point the manifest at the fixture host only (a real run would use the auto-detected hosts)
-    m = json.load(open(cfg["manifest_path"], encoding="utf-8"))
-    m["hosts"] = [{"name": "fixture", "kind": "local", "claude_roots": [os.path.join(FX, "claude")], "codex_roots": [os.path.join(FX, "codex")], "gemini_roots": [os.path.join(FX, "gemini")],
-                   "cline_roots": ["cline=" + os.path.join(FX, "cline")], "aider_roots": [os.path.join(FX, "aider")], "kimi_roots": [os.path.join(FX, "kimi")], "vibe_roots": [os.path.join(FX, "vibe")],
-                   "continue_roots": [os.path.join(FX, "continue")], "pi_roots": [os.path.join(FX, "pi")], "generic_roots": ["codebuff=" + os.path.join(FX, "generic")]}]
-    json.dump(m, open(cfg["manifest_path"], "w", encoding="utf-8"), indent=2)
+    # point the manifest at the fixture host only (a real run would use the auto-detected hosts); every other key the
+    # onboarding wrote (capture_prompts among them) is kept
+    def point_manifest_at_fixture():
+        m = json.load(open(cfg["manifest_path"], encoding="utf-8"))
+        m["hosts"] = [{"name": "fixture", "kind": "local", "claude_roots": [os.path.join(FX, "claude")], "codex_roots": [os.path.join(FX, "codex")], "gemini_roots": [os.path.join(FX, "gemini")],
+                       "cline_roots": ["cline=" + os.path.join(FX, "cline")], "aider_roots": [os.path.join(FX, "aider")], "kimi_roots": [os.path.join(FX, "kimi")], "vibe_roots": [os.path.join(FX, "vibe")],
+                       "continue_roots": [os.path.join(FX, "continue")], "pi_roots": [os.path.join(FX, "pi")], "generic_roots": ["codebuff=" + os.path.join(FX, "generic")]}]
+        json.dump(m, open(cfg["manifest_path"], "w", encoding="utf-8"), indent=2)
+        return m
+    m = point_manifest_at_fixture()
     shutil.copy(os.path.join(ROOT, "examples", "accounts.fixtures.json"), cfg["accounts_path"])
     r1 = run([py, ledger, "run", "--no-detect"], env=env)
     r2 = run([py, ledger, "run", "--no-detect"], env=env)
@@ -98,6 +103,20 @@ def check_cli(scan_dir):
     counts = st.counts()
     last = st.last_run()
     st.close()
+    # prompt text is an opt-in: the default onboarding leaves it off, so the scan writes no prompts file, the store
+    # holds no prompt rows, the manifest says so, and the prompt presets explain instead of answering "0 rows"
+    scan_prompts = os.path.join(cfg["workdir"], "scans", "fixture", "prompts.fixture.jsonl")
+    qoff = run([py, ledger, "query", "prompts", "--grep", "do the thing", "--format", "json"], env=env)
+    qoff2 = run([py, ledger, "query", "prompt-count"], env=env)
+    inv_off = json.load(open(os.path.join(cfg["workdir"], "scans", "fixture", "inventory.fixture.json"), encoding="utf-8"))
+    pgood = (counts["prompts"] == 0 and not os.path.exists(scan_prompts) and m.get("capture_prompts") is False and inv_off.get("prompts_captured") is False
+             and qoff.returncode == 0 and "prompt capture is off" in qoff.stdout and "[" not in qoff.stdout and "prompt capture is off" in qoff2.stdout
+             and os.path.getsize(os.path.join(cfg["workdir"], "compiled", "all_prompts.jsonl")) == 0)
+    print("prompts off (default): store prompts %d, scan prompts file %s, manifest capture_prompts %s, query explains %s  %s" % (
+        counts["prompts"], "absent" if not os.path.exists(scan_prompts) else "PRESENT", m.get("capture_prompts"), "prompt capture is off" in qoff.stdout, "OK" if pgood else "FAIL"))
+    if not pgood:
+        sys.stdout.write(qoff.stdout[-500:] + qoff.stderr[-500:] + r1.stdout[-800:])
+    ok = ok and pgood
     n = sum(1 for _ in open(os.path.join(scan_dir, "events.fixture.jsonl"), encoding="utf-8"))
     dash = os.path.join(cfg["workdir"], "compiled", "agent-ledger.html")
     pkgs = [d for d in os.listdir(os.path.join(cfg["workdir"], "reports")) if d.endswith(".zip")] if os.path.isdir(os.path.join(cfg["workdir"], "reports")) else []
@@ -125,8 +144,24 @@ def check_cli(scan_dir):
     if not good:
         sys.stdout.write(r1.stdout[-2000:] + r2.stdout[-2000:])
     ok = ok and bool(good)
+    # opt in: the same preferences with prompts.capture=y; the regenerated manifest carries capture_prompts, the
+    # scan writes the prompts file and the store ingests the fixture prompts (the later query checks rely on this)
+    run([py, ledger, "init", "--yes", "--set", "prompts.capture=y"], env=env)
+    m_on = point_manifest_at_fixture()
+    r_on = run([py, ledger, "run", "--no-detect"], env=env)
+    st = ledger_store.Store.open("json", cfg["store"]["path"])
+    counts_on = st.counts()
+    st.close()
+    inv_on = json.load(open(os.path.join(cfg["workdir"], "scans", "fixture", "inventory.fixture.json"), encoding="utf-8"))
+    ogood = (m_on.get("capture_prompts") is True and r_on.returncode == 0 and counts_on["prompts"] > 0 and os.path.isfile(scan_prompts) and os.path.getsize(scan_prompts) > 0
+             and counts_on["events"] == n and inv_on.get("prompts_captured") is True)
+    print("prompts on (opt-in): manifest capture_prompts %s, store prompts %d, scan prompts file %s, events still %d  %s" % (
+        m_on.get("capture_prompts"), counts_on["prompts"], "present" if os.path.isfile(scan_prompts) else "ABSENT", counts_on["events"], "OK" if ogood else "FAIL"))
+    if not ogood:
+        sys.stdout.write(r_on.stdout[-1500:] + r_on.stderr[-800:])
+    ok = ok and ogood
     s = run([py, ledger, "status"], env=env)
-    good = "events" in s.stdout and "Fixture Co" in s.stdout
+    good = "events" in s.stdout and "Fixture Co" in s.stdout and "prompt capture: on" in s.stdout
     print("status:  %s" % ("OK" if good else "FAIL\n" + s.stdout))
     ok = ok and good
     out_csv = os.path.join(OUT, "export.csv")

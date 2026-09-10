@@ -549,6 +549,77 @@ def check_examples_self_contained():
     return good
 
 
+def check_generic_root_guard():
+    """The generic sniffer refuses a home / AppData / .config root before opening anything, and never opens a
+    credential-looking file below an accepted root (counted in the inventory)."""
+    scanner = os.path.join(SCRIPTS, "compile_ai_logs.py")
+    home = os.path.expanduser("~")
+    broad = [home, os.path.join(home, "AppData", "Roaming") if os.name == "nt" else os.path.join(home, ".config"), os.path.join(home, "Documents")]
+    refused = 0
+    for i, root in enumerate(broad):
+        out_dir = os.path.join(OUT, "generic-refused-%d" % i)
+        r = run([PY, scanner, "scan", "--host", "g", "--out-dir", out_dir, "--generic-root", "tool=" + root])
+        if r.returncode != 0 and "generic root" in (r.stderr + r.stdout) and not os.path.exists(out_dir):
+            refused += 1
+    # an accepted root with one usage file and three credential-looking files carrying the same usage shape
+    root = os.path.join(OUT, "generic-root", "demo-tool")
+    os.makedirs(root, exist_ok=True)
+    usage = {"messages": [{"role": "assistant", "timestamp": "2026-09-01T10:00:00Z", "model": "m", "usage": {"input_tokens": 10, "output_tokens": 5}}]}
+    for fn in ("chat.json", "auth.json", "api_token.json", ".env.json"):
+        json.dump(usage, open(os.path.join(root, fn), "w", encoding="utf-8"))
+    out_dir = os.path.join(OUT, "generic-accepted")
+    r = run([PY, scanner, "scan", "--host", "g", "--out-dir", out_dir, "--no-prompts", "--generic-root", "demo=" + root])
+    ev_path = os.path.join(out_dir, "events.g.jsonl")
+    events = [json.loads(ln) for ln in open(ev_path, encoding="utf-8")] if os.path.isfile(ev_path) else []
+    srcs = {os.path.basename(e.get("src") or "") for e in events}
+    inv = json.load(open(os.path.join(out_dir, "inventory.g.json"), encoding="utf-8")) if os.path.isfile(os.path.join(out_dir, "inventory.g.json")) else {"roots": []}
+    row = (inv["roots"] or [{}])[0]
+    skipped_ok = r.returncode == 0 and srcs == {"chat.json"} and len(events) == 1 and row.get("credential_files_skipped") == 3 and "3 credential-like files skipped" in (row.get("note") or "")
+    no_prompts_file = not os.path.exists(os.path.join(out_dir, "prompts.g.jsonl")) and inv.get("prompts_captured") is False
+    good = refused == len(broad) and skipped_ok and no_prompts_file
+    print("generic:   %d/%d broad roots refused before any output, credential files skipped %s (events from %s, skipped %s), --no-prompts writes no prompts file %s  %s" % (
+        refused, len(broad), skipped_ok, sorted(srcs), row.get("credential_files_skipped"), no_prompts_file, "OK" if good else "FAIL"))
+    if not good:
+        print(r.stderr[-400:])
+    return good
+
+
+def check_private_run_files():
+    """POSIX: manifest.run.json and the anonymised tree's config files and exports are created 0600 (they name hosts,
+    roots and accounts, and the pseudonyms map back through anonymize-map.json)."""
+    if os.name == "nt":
+        print("run-files: skipped on Windows (NTFS profile ACLs; POSIX modes are checked in CI)  OK")
+        return True
+    import tempfile
+    old = os.umask(0o022)
+    try:
+        home = tempfile.mkdtemp(prefix="ledger-runfiles-")
+        env = dict(os.environ, AI_USAGE_LEDGER_HOME=home)
+        ledger = os.path.join(SCRIPTS, "ledger.py")
+        run([PY, ledger, "init", "--yes", "--set", "detect.wsl=n", "--set", "detect.all_profiles=n", "--set", "workdir=" + os.path.join(home, "work")], env=env)
+        cfg = json.load(open(os.path.join(home, "config.json"), encoding="utf-8"))
+        m = json.load(open(cfg["manifest_path"], encoding="utf-8"))
+        m["hosts"] = [{"name": "fixture", "kind": "local", "claude_roots": [os.path.join(FX, "claude")], "codex_roots": [os.path.join(FX, "codex")], "aider_roots": [os.path.join(FX, "aider")]}]
+        json.dump(m, open(cfg["manifest_path"], "w", encoding="utf-8"), indent=2)
+        shutil.copy(os.path.join(ROOT, "examples", "accounts.fixtures.json"), cfg["accounts_path"])
+        r1 = run([PY, ledger, "run", "--no-detect", "--skip-tools", "aider"], env=env)
+        r2 = run([PY, ledger, "run", "--no-detect", "--no-scan", "--anonymize"], env=env)
+        anon = os.path.join(cfg["workdir"], "anonymized")
+        files = {"manifest.run": os.path.join(home, "manifest.run.json"), "anon-accounts": os.path.join(anon, "accounts.json"), "anon-pricing": os.path.join(anon, "pricing.json"),
+                 "anon-report_config": os.path.join(anon, "report_config.json"), "anon-manifest": os.path.join(anon, "manifest.json"),
+                 "anon-events": os.path.join(anon, "store-export", "events.anon.jsonl"), "anon-sessions": os.path.join(anon, "store-export", "sessions.anon.jsonl")}
+        modes = {k: (os.stat(p).st_mode & 0o777 if os.path.isfile(p) else None) for k, p in files.items()}
+        bad = {k: (oct(v) if v is not None else "missing") for k, v in modes.items() if v != 0o600}
+        good = r1.returncode == 0 and r2.returncode == 0 and not bad
+        print("run-files: %s under umask 022  %s" % ("manifest.run.json and the anonymised tree's config files and exports are 0600" if not bad else "wrong: %s" % bad, "OK" if good else "FAIL"))
+        if not good:
+            print(r1.stderr[-400:], r2.stderr[-400:])
+        shutil.rmtree(home, ignore_errors=True)
+        return good
+    finally:
+        os.umask(old)
+
+
 def main():
     shutil.rmtree(OUT, ignore_errors=True)
     os.makedirs(OUT, exist_ok=True)
@@ -570,6 +641,8 @@ def main():
     ok = check_shared_predicates() and ok
     ok = check_archive_boundaries() and ok
     ok = check_private_permissions() and ok
+    ok = check_generic_root_guard() and ok
+    ok = check_private_run_files() and ok
     print("SECURITY OK" if ok else "SECURITY CHECKS FAILED")
     return 0 if ok else 1
 
