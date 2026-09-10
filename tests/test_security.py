@@ -11,6 +11,9 @@ Covers the ClawHub audit findings for 1.5.0:
   3. scheduled wrapper: no free-form arguments, every word quoted, mode 0700 on POSIX (schedule.py)
   4. branding with markup, bad colours, remote logo, extra CSS -> escaped / dropped (build_dashboard.py, build_report.py)
   5. generated dashboard, study and documents carry a CSP and no http(s) resource references
+Covers the audit findings for 1.5.4:
+  9. an editable pipeline manifest is refused before it is read; a manifest-supplied interpreter for a
+     local/share host must look like python and exist, so it cannot select an arbitrary executable
 Covers the audit findings for 1.5.1:
   6. unattended onboarding stays neutral (no publisher identity); `run` without a config refuses; presets are explicit
   7. archive: '..' and absolute paths, hostile host names and escapes outside the root are refused; ssh archive
@@ -103,6 +106,43 @@ def check_manifest_validation():
     print("manifest:  %d/%d bad ssh hosts refused, good host accepted %s, wsl %d/2, control chars %d/3, pipeline refused before ssh %s  %s" % (refused, len(bad_hosts), accepted, wsl_refused, ctl, e2e, "OK" if good else "FAIL"))
     if not e2e:
         print(r.stderr[-400:])
+    return good
+
+
+def check_manifest_ownership():
+    """A manifest picks interpreters, ssh targets and roots, so an editable one must stop the run outright."""
+    base = os.path.join(OUT, "ownership")
+    os.makedirs(base, exist_ok=True)
+    canary = os.path.join(base, "pwned")
+    # a manifest-supplied interpreter must not be an arbitrary executable
+    refused = 0
+    hostile = [{"python": "/bin/sh"}, {"python": "evil.sh"}, {"python": os.path.join(base, "evil")}, {"python": "-c"}]
+    for h in hostile:
+        try:
+            safety.validate_local_python(h, PY)
+        except SystemExit:
+            refused += 1
+    default_kept = safety.validate_local_python({}, PY) == PY
+    interp = refused == len(hostile) and default_kept
+
+    if os.name == "nt":
+        perms = True
+        note = "writable-manifest refusal skipped on Windows (POSIX modes are checked in CI)"
+    else:
+        m = {"workdir": os.path.join(base, "work"),
+             "hosts": [{"name": "l", "kind": "local", "python": "/bin/sh", "claude_roots": [base]}]}
+        mp = os.path.join(base, "shared-manifest.json")
+        json.dump(m, open(mp, "w", encoding="utf-8"))
+        os.chmod(mp, 0o666)
+        env = dict(os.environ)
+        env.pop("AI_USAGE_LEDGER_ALLOW_SHARED", None)
+        r = run([PY, os.path.join(SCRIPTS, "run_pipeline.py"), "--manifest", mp, "--only", "scan"], env=env)
+        perms = r.returncode != 0 and "pipeline manifest" in (r.stderr + r.stdout) and not os.path.exists(canary)
+        note = "writable manifest refused %s" % perms
+
+    good = interp and perms
+    print("manifest own: %d/%d hostile interpreters refused, default kept %s, %s  %s" % (
+        refused, len(hostile), default_kept, note, "OK" if good else "FAIL"))
     return good
 
 
@@ -320,6 +360,7 @@ def main():
             print(r.stderr[-800:])
     ok = check_sort_injection()
     ok = check_manifest_validation() and ok
+    ok = check_manifest_ownership() and ok
     ok = check_wrapper() and ok
     ok = check_branding_and_pages(compiled) and ok
     ok = check_examples_self_contained() and ok

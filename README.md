@@ -178,4 +178,4 @@ Code, templates, and documentation are licensed under the MIT License. CompleteT
 
 ## Network Boundary
 
-This skill is local-only. The scripts make no outbound network calls and post no metadata anywhere; SSH and WSL are reached only for hosts the operator names.
+This skill is local-only. The scripts make no outbound network calls and post no metadata anywhere; SSH and WSL are reached only for hosts the operator names. Generated pages are self-contained and carry a `Content-Security-Policy` that forbids network loads; only if the operator sets `branding.allow_external_resources: true` can a rendered page reference a remote logo or Google Fonts stylesheet, which the viewer's browser then fetches.
