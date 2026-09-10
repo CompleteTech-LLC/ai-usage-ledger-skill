@@ -21,7 +21,10 @@ tools (their logs are append-only), so the latest copy is a superset. Nothing is
 Boundaries: host names are plain identifiers, every source path is validated (absolute, no control characters,
 no '..'), every destination is checked to stay inside the archive root after symlink resolution, and remote
 hosts are reached with fixed commands that read NUL-delimited file lists on stdin (no remote shell script is
-ever composed from paths). The archive directory and index are owner-only.
+ever composed from paths). The archive directory and index are owner-only. Credential-looking files (auth.json,
+.credentials.json, credentials.json, *token*.json, *.pem, *.key, .env, anything under .ssh/.aws/.gnupg and the
+rest of safety.is_credential_file) are excluded by one predicate on every path: local, WSL share, SSH, and again
+when restoring; the index refuses such rows outright, so a scanner that referenced one cannot get it archived.
 
 Standard library only.
 """
@@ -69,6 +72,7 @@ def rel_path(path):
 def collect_sources(scans_dir, host_name):
     """Every distinct source file the scanners read for one host, plus counters beside the roots."""
     srcs = set()
+    credential_like = set()
     d = os.path.join(scans_dir, host_name)
     for pat in ("events.*.jsonl", "sessions.*.jsonl"):
         for p in glob.glob(os.path.join(d, pat)):
@@ -80,10 +84,15 @@ def collect_sources(scans_dir, host_name):
                         continue
                     s = row.get("src") or row.get("file")
                     if s:
+                        if safety.is_credential_file(s):  # a scanner may reference one; the archive never copies it
+                            credential_like.add(str(s))
+                            continue
                         try:
                             srcs.add(safety.check_source_path(s))
                         except SystemExit as ex:  # scan output is data, not trusted: skip anything that is not a plain absolute path
-                            sys.stderr.write("archive: skipped %s\n" % ex)
+                            sys.stderr.write("archive: skipped %s\n" % safety.clean_for_terminal(str(ex), limit=300))
+    if credential_like:
+        sys.stderr.write("archive: %s: %d credential-like source path(s) excluded from the archive\n" % (host_name, len(credential_like)))
     roots = set()
     for p in glob.glob(os.path.join(d, "inventory.*.json")):
         try:
@@ -126,6 +135,8 @@ class Archive:
         return dest, rel
 
     def _write(self, host, path, data, size, mtime, sha, existed):
+        if safety.is_credential_file(path):  # the index refuses credential-like rows whatever code path produced them
+            raise safety.UnsafeValue("refusing to archive a credential-like file: %r" % str(path)[:80])
         dest, rel = self._checked_dest(host, path)
         tmp = dest + ".part"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -147,17 +158,18 @@ class Archive:
         """paths are native paths on that host; prefix (e.g. //wsl$/Ubuntu) makes them readable here."""
         safety.check_host_name(host)
         known = self._known(host)
-        new = upd = nbytes = 0
+        new = upd = nbytes = creds = 0
         started = now()
         for p in sorted(paths):
+            if safety.is_credential_file(p):
+                creds += 1
+                continue
             try:
                 p = safety.check_source_path(p)
             except SystemExit as ex:
-                log("  skip: %s" % ex)
+                log("  skip: %s" % safety.clean_for_terminal(str(ex), limit=300))
                 continue
             local = (prefix.rstrip("/\\") + p) if prefix and not p.startswith(prefix) else p
-            if os.path.basename(p).lower() in ("auth.json", ".credentials.json", "credentials.json"):
-                continue
             try:
                 st = os.stat(local)
             except OSError:
@@ -171,7 +183,7 @@ class Archive:
                 with open(local, "rb") as fh:
                     data = fh.read()
             except OSError as ex:
-                log("  skip %s: %s" % (p, ex))
+                log("  skip %s: %s" % (safety.clean_for_terminal(p, limit=300), safety.clean_for_terminal(str(ex), limit=300)))
                 continue
             sha = hashlib.sha256(data).hexdigest()
             self._write(host, p, data, st.st_size, st.st_mtime, sha, existed=prev is not None)
@@ -183,6 +195,8 @@ class Archive:
             if (new + upd) % 200 == 0:
                 self.db.commit()
                 log("  %s: %d new, %d updated, %.2f GB" % (host, new, upd, nbytes / 1e9))
+        if creds:
+            log("  %s: %d credential-like path(s) excluded from the archive" % (host, creds))
         self.db.execute("INSERT INTO runs (host, started_at, finished_at, files_new, files_updated, bytes) VALUES (?,?,?,?,?,?)", (host, started, now(), new, upd, nbytes))
         self.db.commit()
         return new, upd, nbytes
@@ -201,24 +215,28 @@ class Archive:
         target, _, _ = safety.validate_ssh_host(cfg)
         known = self._known(host)
         wanted = []
+        creds = 0
         for p in sorted(paths):
-            if os.path.basename(p).lower() in ("auth.json", ".credentials.json"):
+            if safety.is_credential_file(p):  # same predicate as the local path: never asked for, never transferred
+                creds += 1
                 continue
             try:
                 p = safety.check_source_path(p, "remote source path")
             except SystemExit as ex:
-                log("  skip: %s" % ex)
+                log("  skip: %s" % safety.clean_for_terminal(str(ex), limit=300))
                 continue
             if not safety.REMOTE_PATH_RE.match(p) and not re.match(r"^/[^\x00-\x1f\x7f]+$", p):
                 log("  skip: not a plain absolute path: %r" % p[:80])
                 continue
             wanted.append(p)
+        if creds:
+            log("  %s: %d credential-like path(s) excluded from the archive" % (host, creds))
         if not wanted:
             return 0, 0, 0
         # size+mtime first so unchanged files are not transferred (bytes mode: no CRLF translation on Windows)
         r = subprocess.run(["ssh", "-o", "BatchMode=yes", "--", target, self.REMOTE_STAT], input=("\0".join(wanted) + "\0").encode("utf-8"), capture_output=True)
         if r.returncode not in (0, 123):  # 123: xargs ran but some files did not exist, which is expected for optional counters
-            log("  ssh stat failed for %s: %s" % (host, r.stderr.decode("utf-8", "replace")[-300:]))
+            log("  ssh stat failed for %s: %s" % (host, safety.clean_for_terminal(r.stderr.decode("utf-8", "replace")[-300:], limit=300)))
         remote = {}
         for line in r.stdout.decode("utf-8", "replace").splitlines():
             parts = line.split(" ", 2)
@@ -231,7 +249,7 @@ class Archive:
         proc = subprocess.Popen(["ssh", "-o", "BatchMode=yes", "--", target, self.REMOTE_TAR], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         out, err = proc.communicate(input=("\0".join(todo) + "\0").encode("utf-8"))
         if proc.returncode not in (0, 1):  # 1 = some files changed while reading; acceptable for append-only logs
-            log("  ssh tar failed for %s: %s" % (host, err.decode("utf-8", "replace")[-300:]))
+            log("  ssh tar failed for %s: %s" % (host, safety.clean_for_terminal(err.decode("utf-8", "replace")[-300:], limit=300)))
             return 0, 0, 0
         new = upd = nbytes = 0
         with tarfile.open(fileobj=io.BytesIO(out), mode="r:gz") as tf:
@@ -315,12 +333,15 @@ class Archive:
         """Decompress a host's files under `to`; index rows are re-validated and every destination is kept inside `to`."""
         safety.check_host_name(host)
         safety.private_dir(to)
-        n = 0
+        n = creds = 0
         for f in self.list(host, match):
+            if safety.is_credential_file(f["path"]):  # an index written before this rule may still hold one; never put it back on disk
+                creds += 1
+                continue
             try:
                 rel = rel_path(safety.check_source_path(f["path"]))
             except SystemExit as ex:
-                sys.stderr.write("restore: skipped %s\n" % ex)
+                sys.stderr.write("restore: skipped %s\n" % safety.clean_for_terminal(str(ex), limit=300))
                 continue
             dest = os.path.join(to, host, rel)
             safety.private_dir(os.path.dirname(dest))
@@ -334,6 +355,8 @@ class Archive:
                 shutil.copyfileobj(src, out)
             safety.private_file(dest)
             n += 1
+        if creds:
+            sys.stderr.write("restore: %d credential-like index row(s) skipped\n" % creds)
         return n
 
     def close(self):
