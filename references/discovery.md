@@ -1,5 +1,17 @@
 # Finding the logs and the accounts
 
+## Boundaries
+
+| Boundary | Rule |
+|---|---|
+| Whose data | Scan only profiles, drives, distros and hosts the operator owns or is explicitly authorised to audit. Another user's home (`C:\Users\<other>`, `/home/<other>`, `/Users/<other>`), a shared server's other accounts, or a container someone else runs are read only with that person's consent, recorded in the run notes; without it, leave the root out of the manifest and list it under exclusions. |
+| Other profiles and drives, WSL | `detect.all_profiles` and `detect.wsl` are opt-ins the operator turns on at onboarding; the default is the operator's own profile on this machine. `--all-profiles` on `detect_hosts.py` is the same opt-in and needs the same authorisation. |
+| SSH hosts | Only hosts the operator names (at the prompt or in `config.json` `extra_hosts`), with an account they already hold; the skill never discovers hosts, never widens a login and never escalates. |
+| Credential files | `auth.json`, `.claude.json`, `.credentials.json` and saved auth snapshots are opened only under `accounts.from_credentials`; the default is per-host placeholders. When on, only identity claims (account id prefix, plan type, tier) are taken, tokens are never printed or copied, and e-mails and organisation names are kept only under `accounts.identifiable`. Minimised, pseudonymous ids are the default. |
+| Prompt text | Transcript text is stored only under `prompts.capture` (default off) and copied only under `archive.raw_logs` (default off); the default ledger holds counts and metadata. |
+| Escalation | Never `sudo`, never run as another user, never change permissions, never mount or copy a locked directory to get past an access error. A root that cannot be read as the current user is an exclusion: record the path, the reason and the date, and move on. |
+| Outputs | Everything found stays on this machine. Before any output is shared, build the anonymised copy (`ledger.py run --anonymize`) and run `ledger.py publish-check <dir>` on it. |
+
 `scripts/detect_hosts.py` does the routine part of this automatically and `ledger.py init` runs it during onboarding. Read on for what it looks for, what it cannot see, and how to check its output.
 
 ## What the detector covers
@@ -17,7 +29,7 @@ Two profiles that resolve to the same directory (a mapped or `subst` drive lette
 
 What it does not do: read anything that needs elevation, follow SSH (name those hosts at the prompt or in `config.json` `extra_hosts`), or find gateway logs kept outside a home directory (`/srv`, `/opt`, containers). Use the sweep below for those and add them to the manifest by hand.
 
-Enumerate every user profile on every drive and host; the interesting material is often in an old profile backup or a second OS on the same box.
+Within the Boundaries above, enumerate the operator's own profiles on every drive and host they are authorised to audit; the interesting material is often in an old profile backup or a second OS on the same box that belongs to the same person.
 
 ## Where each tool keeps usage
 
@@ -51,11 +63,13 @@ Extend the sweep with the other names from `harness-catalog.md`: dot-dirs `.gemi
 
 Inside WSL: `find ~ -maxdepth 5 -type d \( -name .claude -o -name .codex \)`; also check `~/.local/share` and `~/.config`.
 
-Remote hosts over SSH: run the same `find` plus `ls /home` and `podman ps` / `docker ps` for gateways that keep their own session logs (`/srv`, `/opt`, `/var/lib`). Note what needs sudo and record it as excluded rather than guessing.
+Remote hosts over SSH: only on a host the operator has named and holds an account on, and only after they have confirmed they are authorised to audit it. Run the same `find` under that account's own home. Do not `ls /home` or read other users' homes, and do not open gateway or container session logs in `/srv`, `/opt`, `/var/lib` or under `podman ps` / `docker ps`, unless the operator confirms those services and containers are theirs (or their owner has consented) and the paths are readable as the login user. Never use `sudo`, `su`, a shared root key or a permission change to get past an access error: note the path and the reason, record it as excluded, and leave the root out of the manifest.
 
 Size first: `du -sh` each candidate. Codex trees of tens of GB are normal; the scanner streams them but a WSL tree scanned over the `\\wsl$` share is roughly four times slower than scanning inside the distro.
 
 ## Reading accounts without exposing secrets
+
+This is opt-in and minimised by default. `ledger.py init` drafts `accounts.json` with per-host placeholders unless the operator turns on `accounts.from_credentials`, in which case the tool warns which files and fields it will read and keeps only the identity claims below (account id prefix, plan type, tier), never the tokens; e-mails and organisation names are kept only under `accounts.identifiable`, otherwise accounts are pseudonymous (`codex:<8-char prefix>`, `claude:<8-char hash>`). `templates/accounts.example.json` shows the same opt-ins in the draft. The snippets here are for checking the draft by hand under those same opt-ins, on the operator's own credential files only.
 
 Codex `auth.json` (do not print the tokens; decode claims only):
 

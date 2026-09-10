@@ -821,13 +821,15 @@ def do_publish_check(args):
         print("publish-check: no e-mail, account identifier, organisation name, host name, credential-file path or secret-bearing key found in %s" % target)
         return 0
     seen = set()
+    import safety
     for f, kind, snip in findings:
         k = (f, kind)
         if k in seen:
             continue
         seen.add(k)
         shown = os.path.relpath(f, target) if os.path.isdir(target) and not f.startswith(target + "!") else f
-        print("%-28s %s\n    %s" % (kind, shown, snip.strip()[:140]))
+        # snippets are lines from the files being checked: strip escape sequences and controls before they reach the terminal
+        print("%-28s %s\n    %s" % (kind, safety.clean_for_terminal(shown, limit=300), safety.clean_for_terminal(snip.strip()[:140], limit=140)))
     print("publish-check: %d finding(s); this content identifies people, accounts or machines. Use the anonymised copy (ledger.py run --anonymize) before publishing." % len(seen))
     return 1
 

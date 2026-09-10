@@ -149,6 +149,14 @@ The committed examples use synthetic fixture data only; no real account or trans
 
 `assets/logo.png` is the CompleteTech LLC logo used on the dashboard and study headers, on the HTML band of every ledger document, and in the PDF / DOCX letterhead, whenever the `completetech` preset is selected. Out of the box the skill renders neutral, unbranded pages. `examples/report_config.completetech.json` carries the palette (`#1E3A8A` accent, `#0F172A` ink, `#EEF2FF` soft accent, `#64748B` muted, `#E2E8F0` border, `#F8FAFC` zebra), eyebrow, tagline and footer used across the skill library; onboarding offers these as defaults and stores whatever the operator answers instead. Both pages render in light, dark and system themes with a persisted toggle, starting from the theme chosen at onboarding. They are self-contained: the logo is inlined, fonts fall back to locally installed faces or the system stack, and nothing is fetched from the network.
 
+## Data Collected
+
+- Read: agent transcripts, session logs and the tools' own counters and databases in your own profile (`~/.claude`, `~/.codex`, `~/.copilot`, IDE `globalStorage` and the other roots in `references/harness-catalog.md`); other profiles and drives, WSL distros and SSH hosts only when you enable `detect.all_profiles` / `detect.wsl` or name the host, and only where you own the data or are authorised to audit it. Nothing is modified and nothing needs elevation.
+- Kept: an append-only ledger of per-call metadata (timestamps, models, token counts, list prices, host, project path, session id, pseudonymous account) in `~/.ai-usage-ledger/` (owner-only) plus the generated tables, dashboard, study package and documents under your working directory. Nothing is transmitted; the scripts make no network calls.
+- Opt-in only: prompt text (`prompts.capture`), credential-file claims for account ids and plan types (`accounts.from_credentials`), e-mails and organisation names (`accounts.identifiable`), a copy of the raw log files (`archive.raw_logs`), and a scheduled refresh (`schedule install`, with its own typed consent). All default off.
+- Sharing: build the anonymised copy (`ledger.py run --anonymize`, `doc --anonymize`) and run `ledger.py publish-check <dir>` before anything leaves the machine; it flags e-mails, account ids, organisation and host names and credential references.
+- Removal: `ledger.py schedule remove`, then delete `~/.ai-usage-ledger/` and the generated directories under the working directory; `ledger.py reinit` starts a fresh configuration and keeps the previous store beside it. The full operator disclosure the agent relays before onboarding is the **Before You Start** table in `SKILL.md`.
+
 ## Security Model
 
 - Configuration files (manifest, config, accounts, pricing, report config) are trusted input that names hosts to reach and text to render; keep them owner-writable (the scripts warn otherwise).

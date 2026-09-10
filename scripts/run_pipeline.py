@@ -36,7 +36,18 @@ import safety  # noqa: E402
 
 
 def log(msg):
-    sys.stderr.write("[%s] %s\n" % (time.strftime("%H:%M:%S"), msg))
+    # messages embed paths, exceptions and remote (ssh / wsl) output: strip escape sequences and controls before the terminal sees them
+    sys.stderr.write("[%s] %s\n" % (time.strftime("%H:%M:%S"), safety.clean_for_terminal(msg)))
+
+
+def _captured_tail(r, limit=600):
+    """The last part of a subprocess' captured stderr (or stdout) as clean printable text; '' when nothing was captured."""
+    for raw in (r.stderr, r.stdout):
+        if not raw:
+            continue
+        text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+        return safety.clean_for_terminal(text.strip()[-limit:], limit=limit)
+    return ""
 
 
 def run(cmd, check=True, **kw):
@@ -46,7 +57,8 @@ def run(cmd, check=True, **kw):
     log("$ " + " ".join(shlex.quote(c) for c in cmd))
     r = subprocess.run(cmd, **kw)
     if check and r.returncode != 0:
-        raise SystemExit("command failed (%d): %s" % (r.returncode, cmd))
+        tail = _captured_tail(r)
+        raise SystemExit("command failed (%d): %s%s" % (r.returncode, safety.clean_for_terminal(" ".join(shlex.quote(c) for c in cmd), limit=1000), ("\n" + tail) if tail else ""))
     return r
 
 
