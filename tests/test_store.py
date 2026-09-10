@@ -159,7 +159,7 @@ def check_cli(scan_dir):
     print("anon export: %s" % ("OK" if good else "FAIL"))
     ok = ok and good
     # schedule: dry run only (never installs anything on the test machine)
-    s0 = run([py, ledger, "schedule", "install", "--frequency", "weekly", "--time", "04:15", "--weekday", "fri", "--dry-run"], env=env)
+    s0 = run([py, ledger, "schedule", "install", "--frequency", "weekly", "--time", "04:15", "--weekday", "fri", "--dry-run"], env=env, check=False)
     unconsented = s0.returncode == 3 and "Not installed" in s0.stdout
     c = run([py, ledger, "schedule", "consent", "--frequency", "weekly", "--time", "04:15", "--weekday", "fri"], env=env)
     rec = json.loads(c.stdout[c.stdout.rfind("{"):c.stdout.rfind("}") + 1])
