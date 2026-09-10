@@ -2,7 +2,7 @@
 name: ai-usage-ledger
 description: >-
   Compile every locally recorded AI coding-agent model call (Claude Code, Codex CLI/Desktop, GitHub Copilot CLI, Gemini CLI, opencode, OpenClaw, Cline/Roo/Kilo, aider, Kimi Code, Mistral Vibe, Continue, pi, Codebuff and any JSON-logging tool) across the operator's own profile and, when enabled, other drives, user profiles, WSL distros and named SSH hosts into one append-only, de-duplicated ledger stored as SQLite, JSON or CSV; price it at list API rates; split it by subscription account and billing plan; validate it against the tools' own counters; and render a branded light/dark dashboard plus a research-grade study package. Onboards once (branding, theme, storage backend, scheduled refresh, anonymised publication copy; hosts and accounts auto-detected per OS), remembers the preferences, refreshes with one command or on a schedule, renders fifteen ledger documents (statements, memos, briefs, billing evidence) as Markdown, HTML, PDF and DOCX, can anonymise everything for publication, optionally archives the raw log files themselves so they outlive the tools' retention, and answers detailed questions (per day, project, account, model or session, and inside prompt text or the archived logs when those opt-ins are on) through a query layer over the accumulated store. Disclosure: this skill reads agent transcripts and tool databases on this machine and on hosts the operator names, keeps a durable local ledger under ~/.ai-usage-ledger and the chosen working directory, and captures prompt text or credential-derived account claims only when the operator opts in. Use when asked to "find all my AI logs", "how many tokens did I use", "what would this have cost on the API", "compare my subscriptions", "usage by account", "cache savings", "set up my usage ledger", "monthly usage statement", "publish my usage anonymously", or to refresh an existing ledger.
-version: 1.5.7
+version: 1.5.8
 metadata:
   openclaw:
     skillKey: ai-usage-ledger
@@ -39,10 +39,11 @@ Relay this table to the operator, in chat or on the terminal, before the first o
 | Opt-in: raw-log archive | `archive.raw_logs` (default off). On, every source file the scanners read is copied to `~/.ai-usage-ledger/archive/` (about the size of the tools' log trees, one tenth compressed) so it outlives the tools' retention and `query logs` can search it. |
 | Opt-in: other profiles and drives | `detect.all_profiles` (default off). On, every `Users\<name>` / `/home/<name>` / `/Users/<name>` on every mounted drive is scanned; only profiles the operator owns or is authorised to audit, see `references/discovery.md` Boundaries. |
 | Opt-in: WSL distros | `detect.wsl` (default off). On, `wsl.exe -l -q` lists the distros and each `/home/<name>` inside them is scanned. |
-| Opt-in: SSH hosts | Only hosts the operator names at the prompt or in `config.json` `extra_hosts`; `ssh` and `scp` run fixed commands on those hosts, never on anything discovered. |
+| Opt-in: SSH hosts | Only hosts the operator names at the prompt or in `config.json` `extra_hosts`. For each such host the skill uploads `compile_ai_logs.py` with `scp`, runs it there over `ssh`, and downloads the scan output (events, sessions, prompts if captured, inventory) and, when configured, copies of `state_5.sqlite` / `stats-cache.json` and, with the raw-log archive on, the transcript files themselves. Nothing else crosses the network. |
 | Opt-in: scheduled refresh | Never registered by onboarding or by a configuration key; only `schedule install`, which prints the full disclosure and needs a typed `yes` (and `yes, I understand` for high-impact schedules) from the operator, not from the agent. |
-| Leaving the machine | Nothing leaves through this skill. For anything to be shared, build the anonymised copy (`run --anonymize`, `doc --anonymize`) and run `ledger.py publish-check <dir>` on it first. |
-| How to remove everything | `python3 scripts/ledger.py schedule remove` (if a schedule exists), then delete `~/.ai-usage-ledger/` (or `$AI_USAGE_LEDGER_HOME`) and the generated directories under the working directory. `python3 scripts/ledger.py reinit` starts over with a fresh configuration and keeps the previous store beside the new one with a timestamp. |
+| Leaving the machine | Apart from the SSH transfers above, nothing leaves through this skill and no service is contacted. For anything to be shared, build the anonymised copy (`run --anonymize`, `doc --anonymize`) and run `ledger.py publish-check <dir>` on it first. |
+| Coverage limits | Detection reports the roots it found and the same-volume duplicates it skipped; a directory it could not read or a tool it does not know is not listed. Compare each host's inventory (`files`, `bytes` per root) with a native count when completeness matters (see `references/pitfalls.md` 17). |
+| How to remove everything | `python3 scripts/ledger.py schedule remove` (if a schedule exists), then delete `~/.ai-usage-ledger/` (or `$AI_USAGE_LEDGER_HOME`) and the generated directories under the working directory. `python3 scripts/ledger.py reinit` starts over with a fresh configuration and keeps the previous store beside the new one with a timestamp. If `archive.path` was set outside the ledger home, delete that directory too. |
 
 ## System Boundary
 
@@ -278,7 +279,7 @@ Accounts in `query` come from the same `accounts.json` rules the report uses (`a
 
 | Boundary | Requirement |
 |---|---|
-| Local-only runtime | The scripts make no outbound network calls; SSH and WSL are used only for hosts the operator names in the manifest. |
+| Local-only runtime | The scripts contact no service. The only network traffic is `ssh` / `scp` to hosts the operator names in the manifest: the scanner is uploaded, scan outputs (and, when configured, tool counters or archived transcripts) are downloaded. WSL distros are reached through `wsl.exe` or the `\\wsl$` share only when `detect.wsl` is on. |
 | Generated pages | The dashboard, study and documents are self-contained: no external fonts, images or stylesheets, and a `Content-Security-Policy` meta tag that forbids network loads. A remote logo or Google Fonts stylesheet is used only when `branding.allow_external_resources` is true. |
 | Publishing | Dashboards and study packages are published only when the operator asks (Artifacts, files, or a repository). |
 | Data | Scanned transcripts and the compiled ledger never leave the operator's machines through this skill. |

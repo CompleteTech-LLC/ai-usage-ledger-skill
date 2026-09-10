@@ -25,7 +25,7 @@ Storage backend (sqlite / json / csv) [sqlite]: sqlite
 Working directory for scans, compiled tables and reports [~/.ai-usage-ledger/ledger]: 
 Timezone for time-of-day analysis [UTC]: America/New_York
 Also scan other user profiles and other drives on this machine? (y/n) [n]: y
-Probe WSL distros on Windows? (y/n) [y]: y
+Probe WSL distros on Windows? (y/n) [n]: y
 Read credential files (auth.json, .claude.json) to label accounts with their plan? Tokens are never kept. (y/n) [n]: y
 Keep e-mail addresses and organisation names in accounts.json? (n = pseudonymous account ids only) (y/n) [n]: n
 Also build an anonymised copy for publication on every run? (y/n) [n]: y
@@ -59,7 +59,7 @@ The saved preferences (`~/.ai-usage-ledger/config.json`, salt omitted):
 ```json
 {
   "version": 1,
-  "initialized_at": "2026-09-10T03:58:13+00:00",
+  "initialized_at": "2026-09-10T04:08:00+00:00",
   "home": "~/.ai-usage-ledger",
   "store": {
     "kind": "sqlite",

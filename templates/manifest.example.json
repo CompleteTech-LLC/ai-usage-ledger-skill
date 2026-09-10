@@ -9,6 +9,8 @@
   "accounts": "accounts.json",
   "report_config": "report_config.json",
   "package_accounts": false,
+  "capture_prompts": false,
+  "package_paths": false,
   "study_url": "",
   "hosts": [
     {

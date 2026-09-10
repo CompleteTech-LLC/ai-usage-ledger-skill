@@ -292,7 +292,23 @@ class Archive:
         for row in self.db.execute(q + " ORDER BY host, path", args):
             if grep_path and grep_path.lower() not in row[1].lower():
                 continue
+            if safety.is_credential_file(row[1]):  # a row archived before the exclusion existed is never listed, searched or restored
+                continue
             yield {"host": row[0], "path": row[1], "size": row[2], "mtime": datetime.fromtimestamp(row[3]).isoformat(timespec="seconds"), "archived_at": row[4], "versions": row[5]}
+
+    def purge_credential_rows(self):
+        """Remove index rows (and their stored files) that match the credential predicate; returns how many."""
+        rows = [(h, p) for h, p in self.db.execute("SELECT host, path FROM files") if safety.is_credential_file(p)]
+        for h, p in rows:
+            try:
+                dest, _ = self.dest_for(h, p)
+                if os.path.isfile(dest):
+                    os.remove(dest)
+            except Exception:
+                pass
+            self.db.execute("DELETE FROM files WHERE host=? AND path=?", (h, p))
+        self.db.commit()
+        return len(rows)
 
     def open(self, host, path):
         dest, _ = self.dest_for(host, path)
@@ -414,7 +430,9 @@ def main():
     a = ap.parse_args()
     ar = Archive(a.archive, compress=not a.no_compress)
     if a.cmd == "status":
-        print(json.dumps(ar.status(), indent=2))
+        st = ar.status()
+        st["credential_rows_purged"] = ar.purge_credential_rows()
+        print(json.dumps(st, indent=2))
     elif a.cmd == "list":
         for f in ar.list(a.host, a.grep_path):
             print("%-14s %10d  %s  v%d  %s" % (f["host"], f["size"], f["mtime"], f["versions"], f["path"]))
