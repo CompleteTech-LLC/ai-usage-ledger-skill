@@ -110,7 +110,7 @@ class Archive:
         self.path = path
         self.compress = compress
         marker = os.path.join(path, ".ai-usage-ledger-archive")
-        if os.path.isdir(path) and os.listdir(path) and not os.path.exists(marker) and not os.path.exists(os.path.join(path, "index.sqlite")):
+        if os.path.isdir(path) and os.listdir(path) and not os.path.exists(marker) and not self._is_legacy_archive(path):
             raise safety.UnsafeValue("archive directory %s already holds other files; the archive needs a dedicated directory (it is what `remove everything` deletes)" % path)
         safety.private_dir(path)
         if not os.path.exists(marker):
@@ -120,6 +120,29 @@ class Archive:
         self.db.execute("CREATE TABLE IF NOT EXISTS files (host TEXT, path TEXT, rel TEXT, size INTEGER, mtime REAL, sha256 TEXT, archived_at TEXT, versions INTEGER DEFAULT 1, PRIMARY KEY (host, path))")
         self.db.execute("CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT, started_at TEXT, finished_at TEXT, files_new INTEGER, files_updated INTEGER, bytes INTEGER, note TEXT)")
         self.db.commit()
+
+    @staticmethod
+    def _is_legacy_archive(path):
+        """An unmarked directory counts as one of our archives only if its index has our schema and every other
+        entry is a host directory with a plain name; anything else could be someone's data and is refused."""
+        idx = os.path.join(path, "index.sqlite")
+        if not os.path.isfile(idx):
+            return False
+        try:
+            db = sqlite3.connect("file:%s?mode=ro" % idx.replace("\\", "/"), uri=True)
+            cols = {r[1] for r in db.execute("PRAGMA table_info(files)")}
+            tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            db.close()
+        except sqlite3.Error:
+            return False
+        if not {"host", "path", "rel", "size", "mtime", "sha256", "archived_at"} <= cols or "runs" not in tables:
+            return False
+        for name in os.listdir(path):
+            if name in ("index.sqlite", "index.sqlite-wal", "index.sqlite-shm", "index.sqlite-journal"):
+                continue
+            if not (os.path.isdir(os.path.join(path, name)) and safety.HOST_NAME_RE.match(name)):
+                return False
+        return True
 
     # ---- helpers --------------------------------------------------------------
     def _known(self, host):
@@ -308,8 +331,18 @@ class Archive:
         rows = [(h, p) for h, p in self.db.execute("SELECT host, path FROM files") if safety.is_credential_file(p)]
         purged = unremovable = 0
         for h, p in rows:
-            rel = rel_path(p)
+            try:
+                safety.check_host_name(h)
+                rel = rel_path(p)
+            except SystemExit:
+                unremovable += 1
+                sys.stderr.write("archive: legacy row %r %r has an unsafe host or path; kept as unremovable (delete the archive directory to be rid of it)\n" % (h, p))
+                continue
             candidates = [os.path.join(self.path, h, rel), os.path.join(self.path, h, rel + ".gz")]
+            if not all(safety.contained(self.path, c) for c in candidates):
+                unremovable += 1
+                sys.stderr.write("archive: legacy row %r %r resolves outside the archive; kept as unremovable\n" % (h, p))
+                continue
             ok = True
             for dest in candidates:
                 if os.path.isfile(dest):
