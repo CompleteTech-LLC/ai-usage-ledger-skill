@@ -109,7 +109,12 @@ class Archive:
     def __init__(self, path, compress=True):
         self.path = path
         self.compress = compress
+        marker = os.path.join(path, ".ai-usage-ledger-archive")
+        if os.path.isdir(path) and os.listdir(path) and not os.path.exists(marker) and not os.path.exists(os.path.join(path, "index.sqlite")):
+            raise safety.UnsafeValue("archive directory %s already holds other files; the archive needs a dedicated directory (it is what `remove everything` deletes)" % path)
         safety.private_dir(path)
+        if not os.path.exists(marker):
+            safety.write_private(marker, "This directory is owned by the AI usage ledger's raw-log archive. Delete the whole directory to remove the archive.\n")
         self.db = sqlite3.connect(os.path.join(path, "index.sqlite"))
         safety.private_file(os.path.join(path, "index.sqlite"))
         self.db.execute("CREATE TABLE IF NOT EXISTS files (host TEXT, path TEXT, rel TEXT, size INTEGER, mtime REAL, sha256 TEXT, archived_at TEXT, versions INTEGER DEFAULT 1, PRIMARY KEY (host, path))")
@@ -297,18 +302,29 @@ class Archive:
             yield {"host": row[0], "path": row[1], "size": row[2], "mtime": datetime.fromtimestamp(row[3]).isoformat(timespec="seconds"), "archived_at": row[4], "versions": row[5]}
 
     def purge_credential_rows(self):
-        """Remove index rows (and their stored files) that match the credential predicate; returns how many."""
+        """Remove index rows and stored files that match the credential predicate. A row is dropped only once its
+        file is confirmed gone in both storage modes; otherwise it stays so a later purge can retry.
+        Returns (purged, unremovable)."""
         rows = [(h, p) for h, p in self.db.execute("SELECT host, path FROM files") if safety.is_credential_file(p)]
+        purged = unremovable = 0
         for h, p in rows:
-            try:
-                dest, _ = self.dest_for(h, p)
+            rel = rel_path(p)
+            candidates = [os.path.join(self.path, h, rel), os.path.join(self.path, h, rel + ".gz")]
+            ok = True
+            for dest in candidates:
                 if os.path.isfile(dest):
-                    os.remove(dest)
-            except Exception:
-                pass
-            self.db.execute("DELETE FROM files WHERE host=? AND path=?", (h, p))
+                    try:
+                        os.remove(dest)
+                    except OSError:
+                        ok = False
+            if ok and not any(os.path.isfile(c) for c in candidates):
+                self.db.execute("DELETE FROM files WHERE host=? AND path=?", (h, p))
+                purged += 1
+            else:
+                unremovable += 1
+                sys.stderr.write("archive: could not remove credential-like file for %s %s; its index row is kept\n" % (h, p))
         self.db.commit()
-        return len(rows)
+        return purged, unremovable
 
     def open(self, host, path):
         dest, _ = self.dest_for(host, path)
@@ -430,8 +446,10 @@ def main():
     a = ap.parse_args()
     ar = Archive(a.archive, compress=not a.no_compress)
     if a.cmd == "status":
+        purged, unremovable = ar.purge_credential_rows()  # purge first so the snapshot describes the archive as it is now
         st = ar.status()
-        st["credential_rows_purged"] = ar.purge_credential_rows()
+        st["credential_rows_purged"] = purged
+        st["credential_rows_unremovable"] = unremovable
         print(json.dumps(st, indent=2))
     elif a.cmd == "list":
         for f in ar.list(a.host, a.grep_path):

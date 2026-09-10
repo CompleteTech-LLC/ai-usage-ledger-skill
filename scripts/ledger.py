@@ -42,7 +42,7 @@ import ledger_archive  # noqa: E402
 import ledger_store  # noqa: E402
 import schedule  # noqa: E402
 
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2  # 2: detect.wsl defaults off; a legacy home's implicit True is migrated to False unless detect.explicit
 
 
 def home_dir():
@@ -196,6 +196,7 @@ def set_dotted(cfg, key, value):
         cfg["store"]["path"] = os.path.join(home_dir(), {"sqlite": "ledger.sqlite", "json": "ledger-json", "csv": "ledger-csv"}[value])
     elif key.startswith("detect."):
         cfg["detect"][key[7:]] = value in ("y", "yes", "true", True)
+        cfg["detect"]["explicit"] = True
     elif key in ("accounts.from_credentials", "accounts.identifiable"):
         cfg.setdefault("accounts", {"from_credentials": False, "identifiable": False})[key[9:]] = value in ("y", "yes", "true", True)
         cfg["accounts"]["explicit"] = True
@@ -234,6 +235,12 @@ def migrate_config(cfg):
     cfg.setdefault("archive", {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")})
     cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon", "installed_at": None})
     cfg.setdefault("detect", {"all_profiles": False, "wsl": False, "on_every_run": True})
+    if int(cfg.get("version") or 1) < 2:
+        d = cfg["detect"]
+        if d.get("wsl") and not d.get("explicit"):  # never chosen by the operator: the pre-1.5.8 default is withdrawn
+            d["wsl"] = False
+            sys.stderr.write("config migrated: WSL discovery is now off by default; re-enable it with `init --set detect.wsl=y` if you want it.\n")
+        cfg["version"] = CONFIG_VERSION
     cfg.setdefault("branding", dict(DEFAULT_BRAND))
     cfg.setdefault("extra_hosts", [])
     return cfg
@@ -304,6 +311,9 @@ def onboard(args):
     cfg.setdefault("anonymize", {"on_every_run": False, "salt": secrets.token_hex(16)})
     cfg.setdefault("archive", {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")})
     cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon", "install": False, "installed_at": None})
+    ap_ = cfg["archive"].get("path") or ""
+    if cfg["archive"].get("raw_logs") and os.path.isdir(ap_) and os.listdir(ap_) and not os.path.exists(os.path.join(ap_, ".ai-usage-ledger-archive")) and not os.path.exists(os.path.join(ap_, "index.sqlite")):
+        raise SystemExit("archive.path %s already holds other files; choose an empty or new directory dedicated to the archive (it is what `remove everything` deletes)" % ap_)
     save_config(cfg)
     sch = cfg["schedule"]
     sch.pop("install", None)
