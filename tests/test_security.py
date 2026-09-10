@@ -161,7 +161,7 @@ def check_wrapper():
     r = run([PY, os.path.join(SCRIPTS, "schedule.py"), "--home", home, "install", "--extra-args", "--x", "--dry-run"])
     no_extra = r.returncode != 0 and "extra-args" in (r.stderr + r.stdout)
     r2 = run([PY, os.path.join(SCRIPTS, "schedule.py"), "--home", home, "install", "--frequency", "daily", "--time", "03:00", "--anonymize", "--dry-run"])
-    dry = r2.returncode == 0 and "will contain" in r2.stdout and not os.path.exists(os.path.join(OUT, "pwned"))
+    dry = r2.returncode == 3 and "wrapper" in r2.stdout and "Not installed" in r2.stdout and not os.path.exists(os.path.join(OUT, "pwned"))
     mode_ok = True
     if not schedule.IS_WIN:
         p = schedule.write_wrapper(home, PY, ["anonymize"])
@@ -206,6 +206,114 @@ def check_branding_and_pages(compiled):
     print("branding:  " + "; ".join("%s %s (%s)" % (lb, "ok" if g else "FAIL", d) for lb, g, d in results) + "  %s" % ("OK" if good else "FAIL"))
     if r.returncode or r2.returncode:
         print(r.stderr[-400:], r2.stderr[-400:])
+    return good
+
+
+def check_persistence_consent():
+    """Persistence can never come from configuration alone: onboarding does not install, install needs a matching consent."""
+    import tempfile
+    home = tempfile.mkdtemp(prefix="ledger-sched-")
+    env = dict(os.environ, AI_USAGE_LEDGER_HOME=home)
+    ledger = os.path.join(SCRIPTS, "ledger.py")
+    r1 = run([PY, ledger, "init", "--yes", "--set", "detect.wsl=n", "--set", "detect.all_profiles=n", "--set", "schedule.frequency=daily", "--set", "schedule.time=04:30", "--set", "schedule.install=y"], env=env)
+    onboarding_safe = r1.returncode == 0 and "Nothing was registered" in r1.stdout and "ignored" in r1.stderr and not os.path.exists(os.path.join(home, "schedule-consent.json")) and not os.path.exists(os.path.join(home, "run-ledger.cmd")) and not os.path.exists(os.path.join(home, "run-ledger.sh"))
+    r2 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)  # no terminal, no consent
+    refused = r2.returncode == 3 and "Not installed" in r2.stdout and "The scheduled entry will run" in r2.stdout and "schedule remove" in r2.stdout and ("schtasks" not in r2.stdout and "crontab line" not in r2.stdout)
+    # a consent for a different configuration is rejected
+    json.dump({"approved_by": "test", "approved_at": "2026-01-01T00:00:00+00:00", "config_hash": "0000000000000000", "sensitive_acknowledged": False}, open(os.path.join(home, "schedule-consent.json"), "w", encoding="utf-8"))
+    r3 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)
+    stale = r3.returncode == 3 and "changed since consent" in r3.stdout
+    # the consent printed by `schedule consent`, written by the operator, is accepted
+    c = run([PY, ledger, "schedule", "consent"], env=env)
+    rec = json.loads(c.stdout[c.stdout.rfind("{"):c.stdout.rfind("}") + 1])
+    rec["approved_by"] = "test"
+    json.dump(rec, open(os.path.join(home, "schedule-consent.json"), "w", encoding="utf-8"))
+    r4 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)
+    accepted = r4.returncode == 0 and "consent: consented" in r4.stdout and ("schtasks" in r4.stdout or "crontab line" in r4.stdout) and "04:30" in r4.stdout
+    # high-impact schedule (raw-log archive) needs the separate acknowledgement
+    run([PY, ledger, "init", "--yes", "--set", "archive.raw_logs=y"], env=env)
+    r5 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)
+    sensitive_refused = r5.returncode == 3 and ("changed since consent" in r5.stdout or "high-impact" in r5.stdout) and "HIGH-IMPACT" in r5.stdout
+    c2 = run([PY, ledger, "schedule", "consent"], env=env)
+    rec2 = json.loads(c2.stdout[c2.stdout.rfind("{"):c2.stdout.rfind("}") + 1])
+    rec2["approved_by"] = "test"
+    rec2["sensitive_acknowledged"] = False
+    json.dump(rec2, open(os.path.join(home, "schedule-consent.json"), "w", encoding="utf-8"))
+    r6 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)
+    unacked = r6.returncode == 3 and "did not acknowledge" in r6.stdout
+    rec2["sensitive_acknowledged"] = True
+    json.dump(rec2, open(os.path.join(home, "schedule-consent.json"), "w", encoding="utf-8"))
+    r7 = run([PY, ledger, "schedule", "install", "--dry-run", "--expires", "2099-12-31"], env=env)
+    # a different expiry changes the material configuration, so it must be re-consented; the same one passes
+    expiry_changes = r7.returncode == 3 and "changed since consent" in r7.stdout
+    r8 = run([PY, ledger, "schedule", "install", "--dry-run"], env=env)
+    acked = r8.returncode == 0 and "--archive" in r8.stdout
+    # an expired scheduled run does nothing and never touches a scheduler entry it did not consent to
+    os.remove(os.path.join(home, "schedule-consent.json"))
+    r9 = run([PY, ledger, "run", "--until", "2000-01-01"], env=env)
+    expired = r9.returncode == 0 and "expired" in r9.stdout and "nothing to do" in r9.stdout
+    good = onboarding_safe and refused and stale and accepted and sensitive_refused and unacked and expiry_changes and acked and expired
+    print("persistence: onboarding never installs %s, no-consent refused %s, stale consent refused %s, matching consent accepted %s, high-impact refused %s / unacknowledged %s / acknowledged %s, expiry re-consent %s, expired run inert %s  %s" % (
+        onboarding_safe, refused, stale, accepted, sensitive_refused, unacked, acked, expiry_changes, expired, "OK" if good else "FAIL"))
+    if not good:
+        print(r1.stdout[-300:], r1.stderr[-200:], r2.stdout[-300:], r3.stdout[-200:], r4.stdout[-300:], r5.stdout[-200:], r6.stdout[-200:], r7.stdout[-200:], r8.stdout[-200:], r9.stdout[-200:])
+    shutil.rmtree(home, ignore_errors=True)
+    return good
+
+
+def check_credential_minimisation():
+    """Credential files are read only on request, identity is minimised by default, and publish-check finds leaks."""
+    import tempfile
+    import detect_hosts
+    home = tempfile.mkdtemp(prefix="ledger-cred-")
+    env = dict(os.environ, AI_USAGE_LEDGER_HOME=home)
+    ledger = os.path.join(SCRIPTS, "ledger.py")
+    r1 = run([PY, ledger, "init", "--yes", "--set", "detect.wsl=n", "--set", "detect.all_profiles=n"], env=env)
+    acc = json.load(open(os.path.join(home, "accounts.json"), encoding="utf-8"))
+    blob = json.dumps(acc)
+    default_ok = r1.returncode == 0 and "Reading credential files" not in r1.stderr and "@" not in blob and acc.get("_sensitivity") == "placeholders" and "auth.json (last_refresh" not in blob
+    # opt in, minimised: a warning names the files, and no e-mail or organisation title is retained
+    r2 = run([PY, ledger, "init", "--yes", "--set", "accounts.from_credentials=y", "--set", "accounts.identifiable=n"], env=env)
+    acc2 = json.load(open(os.path.join(home, "accounts.json"), encoding="utf-8"))
+    blob2 = json.dumps(acc2)
+    warned = "Reading credential files" in r2.stderr and "minimised" in r2.stderr
+    minimised = r2.returncode == 0 and "@" not in blob2 and all(not v.get("emails") and not v.get("orgs") for v in acc2["accounts"].values())
+    # a synthetic credential file proves the extraction keeps only the claims, and only the identifiable ones on request
+    fake_root = os.path.join(home, "fakecodex")
+    os.makedirs(fake_root, exist_ok=True)
+    import base64
+    claims = {"https://api.openai.com/auth": {"chatgpt_account_id": "abcdef1234567890", "chatgpt_plan_type": "pro", "organizations": [{"title": "Secret Org"}]}, "https://api.openai.com/profile": {"email": "person@corp.example"}}
+    tok = "h." + base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=") + ".s"
+    json.dump({"tokens": {"id_token": tok, "access_token": "SECRET-ACCESS", "refresh_token": "SECRET-REFRESH"}, "last_refresh": "2026-09-01T00:00:00Z"}, open(os.path.join(fake_root, "auth.json"), "w", encoding="utf-8"))
+    a_min = detect_hosts.read_codex_account(fake_root, identifiable=False)
+    a_id = detect_hosts.read_codex_account(fake_root, identifiable=True)
+    extract_ok = (a_min and a_min["id"] == "codex:abcdef12" and a_min["plan"] == "ChatGPT Pro" and not a_min["emails"] and not a_min["orgs"] and "SECRET" not in json.dumps(a_min)
+                  and a_id and a_id["emails"] == ["person@corp.example"] and a_id["orgs"] == ["Secret Org"] and "SECRET" not in json.dumps(a_id))
+    # publish-check: an identifiable accounts file and a package mentioning its e-mail are caught; the anonymised fixture output is not
+    pkg = os.path.join(home, "pkg")
+    os.makedirs(pkg, exist_ok=True)
+    open(os.path.join(pkg, "USAGE_REPORT.md"), "w", encoding="utf-8").write("Report for person@corp.example (account abcdef12, Secret Org) on host lighthouse, see /home/alice/.codex/auth.json\n")
+    open(os.path.join(pkg, "notes.json"), "w", encoding="utf-8").write('{"access_token": "SECRET-ACCESS-VALUE"}\n')
+    import zipfile
+    with zipfile.ZipFile(os.path.join(home, "pkg.zip"), "w") as z:
+        z.write(os.path.join(pkg, "USAGE_REPORT.md"), "pkg/USAGE_REPORT.md")
+    json.dump({"accounts": {"codex:abcdef12": a_id}, "rules": []}, open(os.path.join(home, "accounts.json"), "w", encoding="utf-8"))
+    r3 = run([PY, ledger, "publish-check", pkg], env=env)
+    caught = (r3.returncode == 1 and "e-mail address" in r3.stdout and "credential file path" in r3.stdout and "secret-bearing key" in r3.stdout and "SECRET-ACCESS-VALUE" not in r3.stdout
+              and ("organisation name" in r3.stdout or "account id prefix" in r3.stdout or "account key" in r3.stdout))
+    rz = run([PY, ledger, "publish-check", os.path.join(home, "pkg.zip")], env=env)
+    caught = caught and rz.returncode == 1 and "e-mail address" in rz.stdout
+    clean_dir = os.path.join(home, "clean")
+    os.makedirs(clean_dir, exist_ok=True)
+    open(os.path.join(clean_dir, "USAGE_REPORT.md"), "w", encoding="utf-8").write("host-1a2b3c: 1,510 calls, example@example.com placeholder only. Claude Code keeps its login in `.claude.json`; auth.json is never copied.\n")
+    r4 = run([PY, ledger, "publish-check", clean_dir], env=env)
+    clean = r4.returncode == 0
+    good = default_ok and warned and minimised and extract_ok and caught and clean
+    print("credentials: default init reads none %s, opt-in warns %s, minimised (no e-mail/org) %s, claim extraction %s, publish-check catches %s / passes clean %s  %s" % (
+        default_ok, warned, minimised, extract_ok, caught, clean, "OK" if good else "FAIL"))
+    if not good:
+        print(r1.stderr[-300:], r2.stderr[-400:], r3.stdout[-400:], r4.stdout[-200:])
+    shutil.rmtree(home, ignore_errors=True)
     return good
 
 
@@ -365,6 +473,8 @@ def main():
     ok = check_branding_and_pages(compiled) and ok
     ok = check_examples_self_contained() and ok
     ok = check_neutral_branding() and ok
+    ok = check_credential_minimisation() and ok
+    ok = check_persistence_consent() and ok
     ok = check_archive_boundaries() and ok
     ok = check_private_permissions() and ok
     print("SECURITY OK" if ok else "SECURITY CHECKS FAILED")

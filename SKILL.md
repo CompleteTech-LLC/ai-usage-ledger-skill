@@ -2,7 +2,7 @@
 name: ai-usage-ledger
 description: >-
   Compile every locally recorded AI coding-agent model call (Claude Code, Codex CLI/Desktop, GitHub Copilot CLI, Gemini CLI, opencode, OpenClaw, Cline/Roo/Kilo, aider, Kimi Code, Mistral Vibe, Continue, pi, Codebuff and any JSON-logging tool) across all drives, user profiles, WSL distros and SSH hosts into one append-only, de-duplicated ledger stored as SQLite, JSON or CSV; price it at list API rates; split it by subscription account and billing plan; validate it against the tools' own counters; and render a branded light/dark dashboard plus a research-grade study package. Onboards once (branding, theme, storage backend, scheduled refresh, anonymised publication copy; hosts and accounts auto-detected per OS), remembers the preferences, refreshes with one command or on a schedule, renders fifteen ledger documents (statements, memos, briefs, billing evidence) as Markdown, HTML, PDF and DOCX, can anonymise everything for publication, optionally archives the raw log files themselves so they outlive the tools' retention, and answers detailed questions (per day, project, account, model, session, prompt text, or inside the archived logs) through a query layer over the accumulated store. Use when asked to "find all my AI logs", "how many tokens did I use", "what would this have cost on the API", "compare my subscriptions", "usage by account", "cache savings", "set up my usage ledger", "monthly usage statement", "publish my usage anonymously", "how much did I use last Tuesday", "which sessions cost the most", "when did I first use model X", "find the session where I asked about Y", or to refresh an existing ledger.
-version: 1.5.5
+version: 1.5.6
 metadata:
   openclaw:
     skillKey: ai-usage-ledger
@@ -23,7 +23,7 @@ metadata:
 |---|---|
 | Usage ledger | Locate, de-duplicate, price and attribute every locally recorded AI coding-agent call on a person's machines. |
 | Starting point | Any request to count tokens, estimate API-equivalent cost, compare subscriptions, or break usage down by account, model, project or time. |
-| Operating boundary | Read-only over the tools' directories; identity claims are decoded, never credentials; nothing is transmitted. The ledger store is append-only: nothing already stored is edited or removed. |
+| Operating boundary | Read-only over the tools' directories; credential files are opened only when the operator opts in, for identity claims never credentials, minimised to pseudonymous ids and plan types unless identifiable output is requested; nothing is transmitted. The ledger store is append-only: nothing already stored is edited or removed. |
 
 ## System Boundary
 
@@ -39,8 +39,8 @@ metadata:
 
 | Step | Action |
 |---|---|
-| 1 | First use only: onboard. Reports are unbranded until the operator chooses branding: answer the first prompt (`none`, or a named preset such as `completetech`), pass `--brand-preset <name>`, or set `brand.*` values; unattended `init --yes` stays neutral and `run` refuses to start without a config. On a terminal run `python3 scripts/ledger.py init` and answer the prompts. From an agent harness, ask the operator the same questions in chat (brand name, eyebrow, tagline, contact, logo, accent colour, theme, storage backend, working directory, timezone, whether to include other profiles / drives / WSL, whether to build an anonymised copy on every run, whether to archive the raw log files themselves (and compress them), and whether to refresh on a schedule: none / daily / weekly / monthly, time, weekday, install now), then run `python3 scripts/ledger.py init --yes --set key=value ...`. Preferences persist in `~/.ai-usage-ledger/config.json` and in the store; later runs never ask again. Installing the schedule changes the operator's Task Scheduler or crontab, so confirm it explicitly before passing `schedule.install=y`. |
-| 2 | Onboarding auto-detects hosts and roots for this OS (`scripts/detect_hosts.py`: Windows, macOS, Linux, every WSL distro, other user profiles and drives, VS Code-family global storage, `CODEX_HOME`-style overrides) and drafts `accounts.json` from credential claims. Review the draft: labels, prices, and the `why` on each rule. Add SSH hosts when prompted or in `config.json` `extra_hosts`. Record what could not be read and why. |
+| 1 | First use only: onboard. Reports are unbranded until the operator chooses branding: answer the first prompt (`none`, or a named preset such as `completetech`), pass `--brand-preset <name>`, or set `brand.*` values; unattended `init --yes` stays neutral and `run` refuses to start without a config. On a terminal run `python3 scripts/ledger.py init` and answer the prompts. From an agent harness, ask the operator the same questions in chat (brand name, eyebrow, tagline, contact, logo, accent colour, theme, storage backend, working directory, timezone, whether to include other profiles / drives / WSL, whether to build an anonymised copy on every run, whether to archive the raw log files themselves (and compress them), and the preferred refresh schedule: none / daily / weekly / monthly, time, weekday), then run `python3 scripts/ledger.py init --yes --set key=value ...`. Preferences persist in `~/.ai-usage-ledger/config.json` and in the store; later runs never ask again. Onboarding never registers a scheduled task: that takes `schedule install`, which the operator confirms themselves after reading its disclosure. |
+| 2 | Onboarding auto-detects hosts and roots for this OS (`scripts/detect_hosts.py`: Windows, macOS, Linux, every WSL distro, other user profiles and drives, VS Code-family global storage, `CODEX_HOME`-style overrides) and drafts `accounts.json`: placeholders per host by default, or from credential claims when the operator answers yes to reading credential files (ask them explicitly; the tool warns which files it opens), pseudonymous unless they also ask for identifiable output. Review the draft: labels, prices, and the `why` on each rule. Add SSH hosts when prompted or in `config.json` `extra_hosts`. Record what could not be read and why. |
 | 3 | Run `python3 scripts/ledger.py run`. It rescans, archives the raw files when `archive.raw_logs` is on, appends only new calls to the store (stable ids; duplicates are skipped), rebuilds the tables, dashboard and study package, and records the run. Repeat as often as wanted. |
 | 4 | Validate per the checks below; fix a rule and run `python3 scripts/ledger.py run --no-scan` to rebuild from the store without rescanning. |
 | 5 | Deliver the dashboard, the study package and `all_events.csv` (or `ledger.py export`), with exclusions and low-confidence rules stated. For a statement, memo or brief, pick a template from `references/ledger-document-catalog.md` and render it with `python3 scripts/ledger.py doc --template <id> --var prepared_for=... [--pdf --docx]`. For anything leaving the organisation, use the anonymised copy (`ledger.py run --anonymize`, then `doc --anonymize`) and check the outputs for names before publishing. |
@@ -50,7 +50,7 @@ metadata:
 | Required Fact | Examples |
 |---|---|
 | Hosts and roots | Every `~/.claude`, `~/.codex`, IDE `globalStorage`, gateway `sessions/` directory, with size and date range. |
-| Accounts | `chatgpt_account_id` prefix, plan type and e-mail from each `auth.json`; `oauthAccount` from each `.claude.json`. |
+| Accounts | Placeholders per host unless `accounts.from_credentials` is on; then the `chatgpt_account_id` prefix and plan type from each `auth.json` and the tier from each `.claude.json`, with e-mails and organisation names only under `accounts.identifiable`. |
 | Prices | List rates per model on the snapshot date, with `assumed` rows named. |
 | Exclusions | Locked directories, closed SSH ports, tools without token fields. |
 
@@ -73,7 +73,8 @@ metadata:
 | Rule | Requirement |
 |---|---|
 | Read-only | Never modify, delete or "clean up" agent directories; do not `wsl --shutdown` while agents run. |
-| Secrets | Decode `id_token` claims for identity; never print or copy tokens or API keys. |
+| Secrets | Credential files are read only with `accounts.from_credentials`; a warning names each file and the fields taken before it is opened; only the claims needed for attribution and pricing are kept and the credential object is dropped immediately; tokens and API keys are never printed or copied. E-mails and organisation names are retained only with `accounts.identifiable`, otherwise accounts are pseudonymous (`codex:<8-char id prefix>`, `claude:<8-char hash>`). |
+| Publication | `accounts.json` is owner-only and separate from the store; it enters a study package only with `package_accounts: true`, which also writes `SENSITIVITY.md`. Run `python3 scripts/ledger.py publish-check <dir>` on anything leaving the machine: it reports e-mail addresses, account identifiers, organisation names, host names and credential-file references. |
 | Evidence classes | Keep class A (per-call records), class B (tool counters) and class C (priced estimates) apart in every table. |
 | Confidence | Every finding and every attribution rule carries a confidence level and its evidence. |
 | Unknowns | Price unpublished models at a stated sibling marked `assumed`; report the share of cost that rests on them. |
@@ -136,11 +137,12 @@ metadata:
 | What is configured and stored | `python3 scripts/ledger.py status` |
 | Export the store | `python3 scripts/ledger.py export --table events --format csv --out events.csv` (`json`, `jsonl`; tables `events`, `sessions`, `prompts`) |
 | Start over | `python3 scripts/ledger.py reinit` |
+| Identity scan before sharing | `python3 scripts/ledger.py publish-check <package or directory> [--term extra]` (exit 1 on findings) |
 | Anonymised copy for publication | `python3 scripts/ledger.py run --anonymize` (or `--set anonymize.on_every_run=y` at onboarding); outputs under `<workdir>/anonymized/`; `ledger.py export --anonymize` for tables |
 | List ledger documents | `python3 scripts/ledger.py doc --list [--stage finance] [--type memo]` |
 | Render a document | `python3 scripts/ledger.py doc --template monthly-usage-statement --var prepared_for="Finance" --var month=2026-08 --pdf --docx` |
 | Render from the anonymised copy | `python3 scripts/ledger.py doc --template executive-summary --anonymize --pdf` |
-| Scheduled refresh | `python3 scripts/ledger.py schedule install --frequency daily --time 03:00` · `schedule status` · `schedule remove` (`--dry-run` prints the wrapper contents and the command only; the wrapper carries `--anonymize` / `--archive` flags at most, nothing free-form) |
+| Scheduled refresh | `python3 scripts/ledger.py schedule install --frequency daily --time 03:00 [--expires YYYY-MM-DD]` (disclosure, then typed confirmation or a matching `schedule-consent.json`) · `schedule consent` (prints the consent record for a terminal-less operator) · `schedule status` · `schedule remove` (`--dry-run` shows everything without registering; the wrapper carries `--anonymize` / `--archive` / `--until` at most, nothing free-form) |
 | Raw-log archive | `python3 scripts/ledger.py archive status` · `archive list --host wsl-ubuntu --grep-path 2026/08` · `archive grep "ECONNRESET" --since 2026-08-01` · `archive restore --host lighthouse --to /tmp/restored --match sessions/2026/08` · one-off: `ledger.py run --archive` |
 | Detailed questions | `python3 scripts/ledger.py query --presets` · `query totals --since 2026-08-01` · `query by-project --tool codex --since 2026-08-01 --until 2026-08-31 --limit 10` · `query sessions --project libreevolve` · `query session --session <id>` · `query prompts --grep "rate limit"` · `query sql "SELECT ..."` · `query logs "pattern" --since 2026-08-01` |
 | Just look at what is on this machine | `python3 scripts/detect_hosts.py --all-profiles` (`--json` for the manifest shape) |
@@ -156,8 +158,9 @@ metadata:
 | `workdir`, `timezone` | Paths and IANA zone. |
 | `detect.all_profiles`, `detect.wsl` | `y` / `n`. |
 | `anonymize.on_every_run` | `y` / `n`: also build `<workdir>/anonymized/` on every run. |
+| `accounts.from_credentials`, `accounts.identifiable` | `y` / `n`: read credential files for account ids and plans (default `n`: per-host placeholders to fill in); keep e-mails and organisation names (default `n`: pseudonymous ids). |
 | `archive.raw_logs`, `archive.compress`, `archive.path` | `y` / `n` keep the raw log files; `y` / `n` gzip them (`n` keeps them re-scannable in place); directory (default `~/.ai-usage-ledger/archive`). |
-| `schedule.frequency`, `schedule.time`, `schedule.weekday`, `schedule.install` | `none` / `daily` / `weekly` / `monthly`; `HH:MM`; `mon`..`sun`; `y` installs the task or cron entry during onboarding (ask first). |
+| `schedule.frequency`, `schedule.time`, `schedule.weekday`, `schedule.expires` | `none` / `daily` / `weekly` / `monthly`; `HH:MM`; `mon`..`sun`; optional `YYYY-MM-DD` after which the scheduled run removes itself. Preferences only: nothing is registered until `schedule install` is confirmed. |
 
 | Output | Path |
 |---|---|
@@ -242,7 +245,9 @@ Accounts in `query` come from the same `accounts.json` rules the report uses (`a
 | Windows | `schtasks` task "AI Usage Ledger" running `~/.ai-usage-ledger/run-ledger.cmd` daily, weekly (`--weekday`) or monthly (day 1) at `--time`. |
 | Linux, WSL, macOS | One crontab line tagged `# ai-usage-ledger` running `run-ledger.sh`; macOS may need Full Disk Access for cron. |
 | Logging | Each run appends to `~/.ai-usage-ledger/logs/run.log`; `ledger.py status` shows the entry and the last log lines. |
-| Consent | Onboarding asks whether to install; an agent passes `--set schedule.install=y` only after the operator has agreed in chat. `--dry-run` prints the exact command. |
+| Consent | Onboarding never registers persistence, and no configuration key can. `schedule install` prints the disclosure (wrapper, schedule, every host and root it will read, archive and anonymise flags, output directories, storage used so far, the removal command) and then needs a typed `yes` on a terminal, plus `yes, I understand` when the schedule is high-impact (raw-log archive, SSH, WSL or other profiles). Without a terminal the operator writes `~/.ai-usage-ledger/schedule-consent.json` from `schedule consent` (approver, timestamp, hash of the exact configuration, high-impact acknowledgement); install refuses when the hash no longer matches. An agent must not write that file on the operator's behalf. |
+| Expiry | `schedule install --expires YYYY-MM-DD` makes the scheduled run stop and remove the entry after that date. |
+| Existing entries | An existing task or cron line is reported before it is replaced. |
 
 ## Definitions
 

@@ -13,6 +13,7 @@ ledger.py - the one entry point people and agents use day to day.
     python3 scripts/ledger.py archive status|list|grep|restore # the raw logs themselves (archive.raw_logs=y)
     python3 scripts/ledger.py query --presets                 # detailed questions over the store and the archive
     python3 scripts/ledger.py query by-project --since 2026-08-01 --tool codex
+    python3 scripts/ledger.py publish-check <dir> # identity scan before anything leaves the machine
     python3 scripts/ledger.py reinit          # fresh onboarding; the old store is kept aside with a timestamp
 
 Preferences (branding, storage backend, working directory, timezone, auto-detection) are captured once,
@@ -24,6 +25,7 @@ Standard library only.
 import argparse
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -58,7 +60,7 @@ def load_config():
     import safety
     safety.refuse_if_shared(p, "ledger config")
     with open(p, encoding="utf-8") as fh:
-        return json.load(fh)
+        return migrate_config(json.load(fh))
 
 
 def save_config(cfg):
@@ -135,13 +137,14 @@ QUESTIONS = [
     ("timezone", "Timezone for time-of-day analysis", lambda c: c["timezone"], None),
     ("detect.all_profiles", "Also scan other user profiles and other drives on this machine? (y/n)", lambda c: "y" if c["detect"]["all_profiles"] else "n", ["y", "n"]),
     ("detect.wsl", "Probe WSL distros on Windows? (y/n)", lambda c: "y" if c["detect"]["wsl"] else "n", ["y", "n"]),
+    ("accounts.from_credentials", "Read credential files (auth.json, .claude.json) to label accounts with their plan? Tokens are never kept. (y/n)", lambda c: "y" if c["accounts"]["from_credentials"] else "n", ["y", "n"]),
+    ("accounts.identifiable", "Keep e-mail addresses and organisation names in accounts.json? (n = pseudonymous account ids only) (y/n)", lambda c: "y" if c["accounts"]["identifiable"] else "n", ["y", "n"]),
     ("anonymize.on_every_run", "Also build an anonymised copy for publication on every run? (y/n)", lambda c: "y" if c["anonymize"]["on_every_run"] else "n", ["y", "n"]),
     ("archive.raw_logs", "Archive the raw log files themselves (every transcript the scanners read), so they outlive the tools' retention? (y/n)", lambda c: "y" if c["archive"]["raw_logs"] else "n", ["y", "n"]),
     ("archive.compress", "Compress the archive with gzip? (y/n; n keeps files re-scannable in place)", lambda c: "y" if c["archive"]["compress"] else "n", ["y", "n"]),
     ("schedule.frequency", "Refresh automatically? (none / daily / weekly / monthly)", lambda c: c["schedule"]["frequency"], ["none", "daily", "weekly", "monthly"]),
     ("schedule.time", "At what local time? (HH:MM)", lambda c: c["schedule"]["time"], None),
     ("schedule.weekday", "Weekday for a weekly refresh (mon..sun)", lambda c: c["schedule"]["weekday"], sorted(schedule.WEEKDAYS)),
-    ("schedule.install", "Install the scheduled task / cron entry now? (y/n)", lambda c: "y" if c["schedule"].get("install") else "n", ["y", "n"]),
 ]
 
 
@@ -154,6 +157,7 @@ def default_config():
         "pricing_path": os.path.join(home_dir(), "pricing.json"), "accounts_path": os.path.join(home_dir(), "accounts.json"),
         "report_config_path": os.path.join(home_dir(), "report_config.json"), "manifest_path": os.path.join(home_dir(), "manifest.json"),
         "package_prefix": "AI_Usage_Ledger", "extra_hosts": [],
+        "accounts": {"from_credentials": False, "identifiable": False},
         "anonymize": {"on_every_run": False, "salt": secrets.token_hex(16)},
         "archive": {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")},
         "schedule": {"frequency": "none", "time": "03:00", "weekday": "mon", "install": False, "installed_at": None},
@@ -175,6 +179,8 @@ def set_dotted(cfg, key, value):
         cfg["store"]["path"] = os.path.join(home_dir(), {"sqlite": "ledger.sqlite", "json": "ledger-json", "csv": "ledger-csv"}[value])
     elif key.startswith("detect."):
         cfg["detect"][key[7:]] = value in ("y", "yes", "true", True)
+    elif key in ("accounts.from_credentials", "accounts.identifiable"):
+        cfg.setdefault("accounts", {"from_credentials": False, "identifiable": False})[key[9:]] = value in ("y", "yes", "true", True)
     elif key == "anonymize.on_every_run":
         cfg.setdefault("anonymize", {"salt": secrets.token_hex(16)})["on_every_run"] = value in ("y", "yes", "true", True)
     elif key in ("archive.raw_logs", "archive.compress"):
@@ -182,7 +188,7 @@ def set_dotted(cfg, key, value):
     elif key == "archive.path":
         cfg.setdefault("archive", {})["path"] = value
     elif key == "schedule.install":
-        cfg.setdefault("schedule", {})["install"] = value in ("y", "yes", "true", True)
+        sys.stderr.write("schedule.install is ignored: onboarding never registers a scheduled task; run `ledger.py schedule install` and confirm there.\n")
     elif key.startswith("schedule."):
         cfg.setdefault("schedule", {})[key[9:]] = value
     else:
@@ -199,10 +205,23 @@ def ask(prompt, default, choices=None):
         return val
 
 
+def migrate_config(cfg):
+    """Add keys introduced after the config was written, so older homes keep working."""
+    cfg.setdefault("accounts", {"from_credentials": False, "identifiable": False})
+    cfg.setdefault("anonymize", {"on_every_run": False, "salt": secrets.token_hex(16)})
+    cfg.setdefault("archive", {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")})
+    cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon", "installed_at": None})
+    cfg.setdefault("detect", {"all_profiles": False, "wsl": True, "on_every_run": True})
+    cfg.setdefault("branding", dict(DEFAULT_BRAND))
+    cfg.setdefault("extra_hosts", [])
+    return cfg
+
+
 def onboard(args):
     cfg = load_config() if not args.reinit else None
     fresh = cfg is None
-    cfg = cfg or default_config()
+    cfg = migrate_config(cfg or default_config())
+    prev_accounts_pref = dict(cfg.get("accounts") or {})
     if getattr(args, "brand_preset", None):
         set_dotted(cfg, "brand.preset", args.brand_preset)
     for kv in args.set or []:
@@ -220,9 +239,10 @@ def onboard(args):
         print("  [%s] %s" % (h["name"], "; ".join(h.get("_found", []))[:400]))
     for n in notes:
         print("  note:", n)
-    accounts = detect_hosts.draft_accounts(hosts)
+    acc_pref = cfg.setdefault("accounts", {"from_credentials": False, "identifiable": False})
+    accounts = detect_hosts.draft_accounts(hosts, read_credentials=acc_pref.get("from_credentials", False), identifiable=acc_pref.get("identifiable", False))
     if interactive:
-        print("\nAccounts found (identity claims only):")
+        print("\nAccounts drafted (%s):" % ("from credential files" if acc_pref.get("from_credentials") else "placeholders; credential files were not read"))
         for k, v in accounts["accounts"].items():
             if v.get("provider") in ("openai", "anthropic"):
                 print("  %-28s %-34s %s" % (k, v.get("label"), v.get("plan")))
@@ -237,26 +257,29 @@ def onboard(args):
     if fresh or not os.path.isfile(cfg["pricing_path"]):
         with open(os.path.join(SKILL, "templates", "pricing.json"), encoding="utf-8") as fh:
             safety.write_private(cfg["pricing_path"], fh.read())
+    pref_changed = (cfg.get("accounts") or {}) != prev_accounts_pref
     if fresh or not os.path.isfile(cfg["accounts_path"]) or args.reinit:
         write_json_private(cfg["accounts_path"], accounts)
+    elif pref_changed:
+        backup = cfg["accounts_path"] + ".before-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+        shutil.copy(cfg["accounts_path"], backup)
+        write_json_private(cfg["accounts_path"], accounts)
+        print("accounts.json redrafted because the credential preferences changed; the previous file is kept at %s" % backup)
     write_manifest(cfg, hosts)
     write_report_config(cfg)
     if fresh or not cfg.get("initialized_at"):
         cfg["initialized_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    cfg.setdefault("accounts", {"from_credentials": False, "identifiable": False})
     cfg.setdefault("anonymize", {"on_every_run": False, "salt": secrets.token_hex(16)})
     cfg.setdefault("archive", {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")})
     cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon", "install": False, "installed_at": None})
     save_config(cfg)
     sch = cfg["schedule"]
-    if sch.get("install") and sch.get("frequency", "none") != "none":
-        rc = schedule.install(home_dir(), sys.executable, sch["frequency"], sch.get("time", "03:00"), sch.get("weekday", "mon"),
-                              ["anonymize"] if cfg["anonymize"].get("on_every_run") else [])
-        sch["installed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds") if rc == 0 else None
-        sch["install"] = False  # one-shot; the saved frequency documents what is installed
-        save_config(cfg)
-        print("Scheduled refresh: %s at %s (%s)" % (sch["frequency"], sch.get("time"), "installed" if rc == 0 else "FAILED to install; run `ledger.py schedule install`"))
-    elif sch.get("frequency", "none") != "none":
-        print("Scheduled refresh preference saved (%s at %s); install it with: python3 scripts/ledger.py schedule install" % (sch["frequency"], sch.get("time")))
+    sch.pop("install", None)
+    if sch.get("frequency", "none") != "none":
+        print("Scheduled refresh preference saved (%s at %s). Nothing was registered: onboarding never installs persistence. "
+              "When you are ready, run `python3 scripts/ledger.py schedule install`; it shows exactly what will run and asks you to confirm "
+              "(remove later with `schedule remove`)." % (sch["frequency"], sch.get("time")))
     st = ledger_store.Store.open(cfg["store"]["kind"], cfg["store"]["path"])
     for k, v in cfg.items():
         st.set_pref(k, v)
@@ -330,6 +353,12 @@ def filter_manifest(src, dst, only=None, skip=None):
 
 
 def do_run(args):
+    if getattr(args, "until", None) and datetime.now().strftime("%Y-%m-%d") > args.until:
+        if os.path.isfile(schedule.consent_path(home_dir())):
+            print("scheduled run expired on %s; removing the schedule" % args.until)
+            return schedule.remove(home_dir())
+        print("scheduled run expired on %s; nothing to do (no schedule consent recorded for %s)" % (args.until, home_dir()))
+        return 0
     cfg = load_config()
     if cfg is None:
         raise SystemExit("No configuration at %s. Run `python3 scripts/ledger.py init` first (interactive), or `init --yes` for neutral defaults; "
@@ -486,8 +515,9 @@ def do_status(args):
     print("workdir:  %s" % cfg["workdir"])
     print("brand:    %s · %s · accent %s · theme %s" % (cfg["branding"].get("name"), cfg["branding"].get("tagline"), cfg["branding"].get("accent"), cfg.get("theme")))
     sch = cfg.get("schedule") or {}
-    print("schedule: %s%s" % (sch.get("frequency", "none"), (" at %s" % sch.get("time")) if sch.get("frequency", "none") != "none" else ""))
+    print("schedule: %s%s%s" % (sch.get("frequency", "none"), (" at %s" % sch.get("time")) if sch.get("frequency", "none") != "none" else "", (" (consented %s)" % sch.get("installed_at")) if sch.get("installed_at") else ""))
     schedule.status(home_dir())
+    print("          remove with: python3 scripts/ledger.py schedule remove")
     print("anonymise on every run: %s" % ("yes" if (cfg.get("anonymize") or {}).get("on_every_run") else "no"))
     arc = cfg.get("archive") or {}
     if arc.get("raw_logs"):
@@ -537,11 +567,26 @@ def do_schedule(args):
             freq = "daily"
         t = args.time or sch.get("time") or "03:00"
         wd = args.weekday or sch.get("weekday") or "mon"
-        rc = schedule.install(home_dir(), sys.executable, freq, t, wd, ["anonymize"] if cfg.get("anonymize", {}).get("on_every_run") else [], args.dry_run)
+        flags = ["anonymize"] if cfg.get("anonymize", {}).get("on_every_run") else []
+        if cfg.get("archive", {}).get("raw_logs"):
+            flags.append("archive")
+        expires = args.expires or sch.get("expires")
+        rc = schedule.install(home_dir(), sys.executable, freq, t, wd, flags, args.dry_run, expires, cfg.get("manifest_path"), cfg.get("workdir"))
         if rc == 0 and not args.dry_run:
-            sch.update({"frequency": freq, "time": t, "weekday": wd, "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+            sch.update({"frequency": freq, "time": t, "weekday": wd, "expires": expires, "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "consent": os.path.join(home_dir(), schedule.CONSENT_FILE)})
             save_config(cfg)
         return rc
+    if args.action == "consent":
+        flags = ["anonymize"] if cfg.get("anonymize", {}).get("on_every_run") else []
+        if cfg.get("archive", {}).get("raw_logs"):
+            flags.append("archive")
+        freq = args.frequency or sch.get("frequency") or "daily"
+        mat = schedule.material_config(home_dir(), sys.executable, freq if freq != "none" else "daily", args.time or sch.get("time") or "03:00", args.weekday or sch.get("weekday") or "mon", flags, args.expires or sch.get("expires"), cfg.get("manifest_path"))
+        print(schedule.disclosure(home_dir(), mat, cfg.get("workdir")))
+        print(json.dumps({"approved_by": "<your name>", "approved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "config_hash": schedule.config_hash(mat), "sensitive_acknowledged": bool(schedule.sensitive_reasons(mat))}, indent=2))
+        print("write that JSON to %s to consent without a terminal, then run `schedule install`" % schedule.consent_path(home_dir()))
+        return 0
     if args.action == "remove":
         rc = schedule.remove(home_dir(), args.dry_run)
         if rc == 0 and not args.dry_run:
@@ -564,6 +609,126 @@ def do_archive(args):
 
 def do_query(args):
     return subprocess.run([sys.executable, os.path.join(HERE, "ledger_query.py")] + args.rest).returncode
+
+
+IDENTITY_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+
+def publish_check(target, accounts_path=None, extra_terms=()):
+    """Scan a directory (or file) that is about to leave the machine for e-mails, account identifiers, organisation
+    names, credential-file paths and known host names. Returns a list of (file, kind, snippet)."""
+    # each term is a compiled pattern: identifiers need boundaries so an 8-digit account prefix does not match inside
+    # a number and a host name does not match inside an unrelated word; host names match case-sensitively
+    terms = []
+
+    def add(kind, value, boundary=None, flags=re.IGNORECASE):
+        v = str(value or "").strip()
+        if len(v) < 4:
+            return
+        pat = re.escape(v)
+        if boundary == "alnum":
+            pat = r"(?<![0-9A-Za-z])" + pat + r"(?![0-9A-Za-z])"
+        elif boundary == "word":
+            pat = r"\b" + pat + r"\b"
+        terms.append((kind, re.compile(pat, flags)))
+
+    if accounts_path and os.path.isfile(accounts_path):
+        try:
+            with open(accounts_path, encoding="utf-8") as fh:
+                AC = json.load(fh)
+            for key, v in (AC.get("accounts") or {}).items():
+                for e in v.get("emails") or []:
+                    add("account e-mail", e)
+                for o in v.get("orgs") or []:
+                    add("organisation name", o, "word")
+                if v.get("chatgpt_account_id_prefix"):
+                    add("account id prefix", v["chatgpt_account_id_prefix"], "alnum")
+                if ":" in key and not key.endswith((":provider", ":usage-based", ":api-keys")):
+                    add("account key", key, "alnum")
+        except Exception:
+            pass
+    for t in extra_terms:
+        add("host name or operator term", t, "word", 0)
+    # a credential *file* counts only when it appears as a path (a separator before the name); generic documentation
+    # that merely names `.claude.json` is not a leak. Secret-bearing keys count anywhere and are reported without values.
+    cred_path_re = re.compile(r"[\\/][^\s\"'`<>]{0,200}?(auth\.json|\.credentials\.json|\.claude\.json)\b", re.IGNORECASE)
+    secret_key_re = re.compile(r"\b(id_token|access_token|refresh_token|OPENAI_API_KEY|ANTHROPIC_API_KEY|api_key)\b\s*[\"':=]", re.IGNORECASE)
+    findings = []
+    texts = []  # (display name, text)
+    binary = (".png", ".pdf", ".docx", ".sqlite", ".gz", ".db", ".jpg", ".jpeg", ".ico", ".woff", ".woff2", ".ttf")
+
+    def add_file(path):
+        if path.lower().endswith(binary):
+            return
+        if path.lower().endswith(".zip"):
+            import zipfile
+            try:
+                with zipfile.ZipFile(path) as z:
+                    for info in z.infolist():
+                        if info.is_dir() or info.filename.lower().endswith(binary):
+                            continue
+                        texts.append((path + "!" + info.filename, z.read(info).decode("utf-8", "replace")))
+            except zipfile.BadZipFile:
+                findings.append((path, "unreadable archive", "not a zip file"))
+            return
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                texts.append((path, fh.read()))
+        except OSError:
+            pass
+
+    if os.path.isdir(target):
+        for dp, _, fns in os.walk(target):
+            for fn in fns:
+                add_file(os.path.join(dp, fn))
+    else:
+        add_file(target)
+    for f, text in texts:
+        for m in IDENTITY_RE.finditer(text):
+            if not m.group(0).lower().endswith(("example.com", "example.net", "example.org")):
+                findings.append((f, "e-mail address", m.group(0)))
+                break
+        for kind, rx in terms:
+            m = rx.search(text)
+            if m:
+                findings.append((f, kind, text[max(0, m.start() - 30):m.end() + 30].replace("\n", " ")))
+        m = cred_path_re.search(text)
+        if m:
+            findings.append((f, "credential file path", "path ending in %s (value not shown)" % m.group(1)))
+        m = secret_key_re.search(text)
+        if m:
+            findings.append((f, "secret-bearing key", "%s present (value not shown)" % m.group(1)))
+    return findings
+
+
+def do_publish_check(args):
+    cfg = load_config()
+    target = args.path
+    if not target and cfg:
+        target = os.path.join(cfg["workdir"], "anonymized") if os.path.isdir(os.path.join(cfg["workdir"], "anonymized")) else os.path.join(cfg["workdir"], "reports")
+    if not target or not os.path.exists(target):
+        raise SystemExit("give a directory or file to check (e.g. the study package or the anonymised tree)")
+    hosts = []
+    if cfg:
+        try:
+            with open(cfg["manifest_path"], encoding="utf-8") as fh:
+                hosts = [h["name"] for h in json.load(fh).get("hosts", [])]
+        except Exception:
+            pass
+    findings = publish_check(target, cfg["accounts_path"] if cfg else None, hosts + list(args.term or []))
+    if not findings:
+        print("publish-check: no e-mail, account identifier, organisation name, host name, credential-file path or secret-bearing key found in %s" % target)
+        return 0
+    seen = set()
+    for f, kind, snip in findings:
+        k = (f, kind)
+        if k in seen:
+            continue
+        seen.add(k)
+        shown = os.path.relpath(f, target) if os.path.isdir(target) and not f.startswith(target + "!") else f
+        print("%-28s %s\n    %s" % (kind, shown, snip.strip()[:140]))
+    print("publish-check: %d finding(s); this content identifies people, accounts or machines. Use the anonymised copy (ledger.py run --anonymize) before publishing." % len(seen))
+    return 1
 
 
 def do_doc(args):
@@ -600,6 +765,7 @@ def main():
     r.add_argument("--no-detect", action="store_true", help="do not refresh the manifest from detection")
     r.add_argument("--anonymize", action="store_true", help="also build the anonymised copy under <workdir>/anonymized")
     r.add_argument("--archive", action="store_true", help="also archive the raw log files this once (archive.raw_logs=y does it every run)")
+    r.add_argument("--until", help="YYYY-MM-DD: used by scheduled wrappers; after this date the run does nothing and removes the schedule")
     r.set_defaults(fn=do_run)
     s = sub.add_parser("status")
     s.set_defaults(fn=do_status)
@@ -610,7 +776,8 @@ def main():
     e.add_argument("--anonymize", action="store_true", help="pseudonymise hosts, sessions, projects and accounts; drop paths")
     e.set_defaults(fn=do_export)
     sc = sub.add_parser("schedule", help="install, remove or show the scheduled refresh (Task Scheduler / cron)")
-    sc.add_argument("action", choices=["install", "remove", "status"])
+    sc.add_argument("action", choices=["install", "remove", "status", "consent"])
+    sc.add_argument("--expires", help="YYYY-MM-DD after which the scheduled run stops and removes the entry")
     sc.add_argument("--frequency", choices=["daily", "weekly", "monthly"])
     sc.add_argument("--time", help="HH:MM local time")
     sc.add_argument("--weekday", choices=sorted(schedule.WEEKDAYS))
@@ -622,6 +789,10 @@ def main():
     qp = sub.add_parser("query", help="detailed questions over the store and archive (arguments pass through to ledger_query.py)")
     qp.add_argument("rest", nargs=argparse.REMAINDER)
     qp.set_defaults(fn=do_query)
+    pc = sub.add_parser("publish-check", help="scan a package, directory or file for e-mails, account ids, organisation names, host names and credential references before it leaves the machine")
+    pc.add_argument("path", nargs="?", help="default: the anonymised tree if present, else the reports directory")
+    pc.add_argument("--term", action="append", help="extra string that must not appear (repeatable)")
+    pc.set_defaults(fn=do_publish_check)
     dc = sub.add_parser("doc", help="render a ledger document; all arguments pass through to render_ledger_doc.py")
     dc.add_argument("rest", nargs=argparse.REMAINDER)
     dc.set_defaults(fn=do_doc)
