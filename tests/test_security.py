@@ -549,6 +549,228 @@ def check_examples_self_contained():
     return good
 
 
+def check_generic_root_guard():
+    """The generic sniffer refuses a home / AppData / .config root before opening anything, and never opens a
+    credential-looking file below an accepted root (counted in the inventory)."""
+    scanner = os.path.join(SCRIPTS, "compile_ai_logs.py")
+    home = os.path.expanduser("~")
+    broad = [home, os.path.join(home, "AppData", "Roaming") if os.name == "nt" else os.path.join(home, ".config"), os.path.join(home, "Documents")]
+    refused = 0
+    for i, root in enumerate(broad):
+        out_dir = os.path.join(OUT, "generic-refused-%d" % i)
+        r = run([PY, scanner, "scan", "--host", "g", "--out-dir", out_dir, "--generic-root", "tool=" + root])
+        if r.returncode != 0 and "generic root" in (r.stderr + r.stdout) and not os.path.exists(out_dir):
+            refused += 1
+    # an accepted root with one usage file and three credential-looking files carrying the same usage shape
+    root = os.path.join(OUT, "generic-root", "demo-tool")
+    os.makedirs(root, exist_ok=True)
+    usage = {"messages": [{"role": "assistant", "timestamp": "2026-09-01T10:00:00Z", "model": "m", "usage": {"input_tokens": 10, "output_tokens": 5}}]}
+    for fn in ("chat.json", "auth.json", "api_token.json", ".env.json"):
+        json.dump(usage, open(os.path.join(root, fn), "w", encoding="utf-8"))
+    out_dir = os.path.join(OUT, "generic-accepted")
+    r = run([PY, scanner, "scan", "--host", "g", "--out-dir", out_dir, "--no-prompts", "--generic-root", "demo=" + root])
+    ev_path = os.path.join(out_dir, "events.g.jsonl")
+    events = [json.loads(ln) for ln in open(ev_path, encoding="utf-8")] if os.path.isfile(ev_path) else []
+    srcs = {os.path.basename(e.get("src") or "") for e in events}
+    inv = json.load(open(os.path.join(out_dir, "inventory.g.json"), encoding="utf-8")) if os.path.isfile(os.path.join(out_dir, "inventory.g.json")) else {"roots": []}
+    row = (inv["roots"] or [{}])[0]
+    skipped_ok = r.returncode == 0 and srcs == {"chat.json"} and len(events) == 1 and row.get("credential_files_skipped") == 3 and "3 credential-like files skipped" in (row.get("note") or "")
+    no_prompts_file = not os.path.exists(os.path.join(out_dir, "prompts.g.jsonl")) and inv.get("prompts_captured") is False
+    good = refused == len(broad) and skipped_ok and no_prompts_file
+    print("generic:   %d/%d broad roots refused before any output, credential files skipped %s (events from %s, skipped %s), --no-prompts writes no prompts file %s  %s" % (
+        refused, len(broad), skipped_ok, sorted(srcs), row.get("credential_files_skipped"), no_prompts_file, "OK" if good else "FAIL"))
+    if not good:
+        print(r.stderr[-400:])
+    return good
+
+
+def check_private_run_files():
+    """POSIX: manifest.run.json and the anonymised tree's config files and exports are created 0600 (they name hosts,
+    roots and accounts, and the pseudonyms map back through anonymize-map.json)."""
+    if os.name == "nt":
+        print("run-files: skipped on Windows (NTFS profile ACLs; POSIX modes are checked in CI)  OK")
+        return True
+    import tempfile
+    old = os.umask(0o022)
+    try:
+        home = tempfile.mkdtemp(prefix="ledger-runfiles-")
+        env = dict(os.environ, AI_USAGE_LEDGER_HOME=home)
+        ledger = os.path.join(SCRIPTS, "ledger.py")
+        run([PY, ledger, "init", "--yes", "--set", "detect.wsl=n", "--set", "detect.all_profiles=n", "--set", "workdir=" + os.path.join(home, "work")], env=env)
+        cfg = json.load(open(os.path.join(home, "config.json"), encoding="utf-8"))
+        m = json.load(open(cfg["manifest_path"], encoding="utf-8"))
+        m["hosts"] = [{"name": "fixture", "kind": "local", "claude_roots": [os.path.join(FX, "claude")], "codex_roots": [os.path.join(FX, "codex")], "aider_roots": [os.path.join(FX, "aider")]}]
+        json.dump(m, open(cfg["manifest_path"], "w", encoding="utf-8"), indent=2)
+        shutil.copy(os.path.join(ROOT, "examples", "accounts.fixtures.json"), cfg["accounts_path"])
+        r1 = run([PY, ledger, "run", "--no-detect", "--skip-tools", "aider"], env=env)
+        r2 = run([PY, ledger, "run", "--no-detect", "--no-scan", "--anonymize"], env=env)
+        anon = os.path.join(cfg["workdir"], "anonymized")
+        files = {"manifest.run": os.path.join(home, "manifest.run.json"), "anon-accounts": os.path.join(anon, "accounts.json"), "anon-pricing": os.path.join(anon, "pricing.json"),
+                 "anon-report_config": os.path.join(anon, "report_config.json"), "anon-manifest": os.path.join(anon, "manifest.json"),
+                 "anon-events": os.path.join(anon, "store-export", "events.anon.jsonl"), "anon-sessions": os.path.join(anon, "store-export", "sessions.anon.jsonl")}
+        modes = {k: (os.stat(p).st_mode & 0o777 if os.path.isfile(p) else None) for k, p in files.items()}
+        bad = {k: (oct(v) if v is not None else "missing") for k, v in modes.items() if v != 0o600}
+        good = r1.returncode == 0 and r2.returncode == 0 and not bad
+        print("run-files: %s under umask 022  %s" % ("manifest.run.json and the anonymised tree's config files and exports are 0600" if not bad else "wrong: %s" % bad, "OK" if good else "FAIL"))
+        if not good:
+            print(r1.stderr[-400:], r2.stderr[-400:])
+        shutil.rmtree(home, ignore_errors=True)
+        return good
+    finally:
+        os.umask(old)
+def check_terminal_cleaning():
+    """Issue #19: subprocess output and data text reach the terminal without escape sequences or C0 controls
+    (schedule._run / status, run_pipeline.run / log, ledger_archive ssh log lines, ledger_query table, publish-check)."""
+    import contextlib
+    import io
+    import tempfile
+    import types
+    import ledger_archive
+    import ledger_query
+    import run_pipeline
+    hostile = "\x1b[31mred\x1b[0m\x07bell\x1b]0;title\x07\x9bZ"
+    # schedule._run: a failing command whose stderr carries ESC / BEL
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc, _ = schedule._run([PY, "-c", "import sys; sys.stderr.write('\\x1b[31mred\\x1b[0m\\x07bell\\x9bZ'); sys.exit(1)"])
+    text = out.getvalue() + err.getvalue()
+    s1 = rc == 1 and "red" in text and "bell" in text and "\x1b" not in text and "\x07" not in text and "\x9b" not in text
+    # schedule.status, both backends, with faked scheduler output and a run log that carry escape sequences
+    home = tempfile.mkdtemp(prefix="ledger-term-")
+    os.makedirs(os.path.join(home, "logs"))
+    with open(os.path.join(home, "logs", "run.log"), "w", encoding="utf-8") as fh:
+        fh.write("[t] scheduled run\n" + hostile + " done\n")
+    real_is_win, real_run, real_cron = schedule.IS_WIN, schedule.subprocess.run, schedule.crontab_lines
+    try:
+        schedule.IS_WIN = True
+        schedule.subprocess.run = lambda *a, **k: types.SimpleNamespace(returncode=0, stdout="Task To Run: " + hostile + " x.cmd\nStatus: Ready" + hostile + "\n", stderr="")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc_w = schedule.status(home)
+        win_text = out.getvalue()
+        schedule.IS_WIN = False
+        schedule.crontab_lines = lambda: ["0 3 * * * /x/run-ledger.sh " + schedule.MARK + hostile]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc_p = schedule.status(home)
+        posix_text = out.getvalue()
+    finally:
+        schedule.IS_WIN, schedule.subprocess.run, schedule.crontab_lines = real_is_win, real_run, real_cron
+    s2 = rc_w == 0 and "Task To Run" in win_text and "Status" in win_text and "\x1b" not in win_text and "\x07" not in win_text and "\x9b" not in win_text
+    s3 = rc_p == 0 and "run-ledger.sh" in posix_text and "last log lines" in posix_text and "done" in posix_text and "\x1b" not in posix_text and "\x07" not in posix_text
+    # run_pipeline.run: the failure message and log() carry no escape sequences
+    err = io.StringIO()
+    msg = ""
+    with contextlib.redirect_stderr(err):
+        try:
+            run_pipeline.run([PY, "-c", "import sys; sys.stderr.write('\\x1b[31mboom\\x1b[0m\\x07'); sys.exit(2)"], capture_output=True, text=True)
+        except SystemExit as ex:
+            msg = str(ex)
+        run_pipeline.log("remote said " + hostile)
+    p1 = msg.startswith("command failed (2)") and "boom" in msg and "\x1b" not in msg and "\x07" not in msg
+    p2 = "remote said red" in err.getvalue() and "\x1b" not in err.getvalue() and "\x07" not in err.getvalue()
+    # ledger_archive.archive_ssh: remote stderr in a log line is cleaned; the transfer never starts
+    import subprocess as sp
+    arch = ledger_archive.Archive(os.path.join(OUT, "arch-term"))
+    lines = []
+    real_sp_run, real_popen = sp.run, sp.Popen
+
+    def fake_run(*a, **k):
+        return types.SimpleNamespace(returncode=5, stdout=b"", stderr=hostile.encode("utf-8") + b" permission denied")
+
+    def no_popen(*a, **k):
+        raise RuntimeError("tar must not start")
+    sp.run, sp.Popen = fake_run, no_popen
+    try:
+        res = arch.archive_ssh("h", {"ssh": "user@host"}, ["/srv/x.jsonl"], log=lines.append)
+    finally:
+        sp.run, sp.Popen = real_sp_run, real_popen
+    arch.close()
+    a1 = res == (0, 0, 0) and any("ssh stat failed" in x and "permission denied" in x for x in lines) and not any("\x1b" in x or "\x07" in x or "\x9b" in x for x in lines)
+    # ledger_query.emit table mode: text cells cleaned and flattened; json mode keeps the raw value
+    out = io.StringIO()
+    ledger_query.emit(["ts", "session", "cwd", "prompt", "total"], [("2026-09-01T00:00:00", "s" + hostile, "/home/u" + hostile, "line one\nline two\x1b[2J", 12345)], "table", out)
+    tab = out.getvalue()
+    q1 = "\x1b" not in tab and "\x07" not in tab and "\x9b" not in tab and "line one line two" in tab and "12,345" in tab and "(1 rows)" in tab
+    out = io.StringIO()
+    ledger_query.emit(["prompt"], [("a\x1b[1mb",)], "json", out)
+    q2 = "\\u001b" in out.getvalue()
+    # publish-check snippets: the checked file carries an escape sequence next to a credential path
+    home2 = tempfile.mkdtemp(prefix="ledger-pc-")
+    target = os.path.join(home2, "notes.txt")
+    with open(target, "w", encoding="utf-8") as fh:
+        fh.write("token read from /home/u/.codex/auth.json " + hostile + " end\n")
+    r = run([PY, os.path.join(SCRIPTS, "ledger.py"), "publish-check", target], env=dict(os.environ, AI_USAGE_LEDGER_HOME=os.path.join(home2, "empty-home")))
+    c1 = r.returncode == 1 and "auth.json" in r.stdout and "\x1b" not in r.stdout and "\x07" not in r.stdout and "\x9b" not in r.stdout
+    good = s1 and s2 and s3 and p1 and p2 and a1 and q1 and q2 and c1
+    print("terminal:  schedule._run %s, status win/posix %s/%s, run_pipeline run/log %s/%s, archive ssh log %s, query table/json %s/%s, publish-check %s  %s" % (
+        s1, s2, s3, p1, p2, a1, q1, q2, c1, "OK" if good else "FAIL"))
+    return good
+
+
+def check_credential_exclusion():
+    """Issue #20: one predicate (safety.is_credential_file) drops credential-like paths on the local path, the SSH
+    path (no ssh process starts), in collect_sources, in the index itself and on restore."""
+    import tempfile
+    import ledger_archive
+    names = ["auth.json", ".credentials.json", "credentials.json", "token.json", "x.pem", "x.key", ".env", os.path.join(".ssh", "config"), os.path.join(".aws", "credentials")]
+    tmp = tempfile.mkdtemp(prefix="ledger-cred-arch-")
+    paths = []
+    for n in names:
+        p = os.path.join(tmp, n)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write('{"secret": "no"}\n')
+        paths.append(p)
+    good_path = os.path.join(tmp, "sessions", "rollout-1.jsonl")
+    os.makedirs(os.path.dirname(good_path))
+    with open(good_path, "w", encoding="utf-8") as fh:
+        fh.write('{"type": "session_meta"}\n')
+    arch = ledger_archive.Archive(os.path.join(OUT, "arch-cred"))
+    logs = []
+    res = arch.archive_local("h", paths + [good_path], log=logs.append)
+    indexed = sorted(r[0] for r in arch.db.execute("SELECT path FROM files WHERE host='h'"))
+    l1 = res[0] == 1 and indexed == [good_path] and any("%d credential-like" % len(names) in x for x in logs)
+    # the index refuses such a row whatever produced it
+    l2 = _raises(lambda: arch._write("h", paths[0], b"x", 1, 0.0, "sha", False)) and sorted(r[0] for r in arch.db.execute("SELECT path FROM files WHERE host='h'")) == [good_path]
+    # an index written before this rule may still hold one: restore skips it
+    arch.db.execute("INSERT INTO files (host, path, rel, size, mtime, sha256, archived_at) VALUES (?,?,?,?,?,?,?)", ("h", paths[0], "x/auth.json", 1, 0.0, "sha", "2026-01-01T00:00:00+00:00"))
+    arch.db.commit()
+    to = os.path.join(tmp, "restored")
+    n = arch.restore("h", to)
+    restored = [os.path.join(dp, fn) for dp, _, fns in os.walk(to) for fn in fns]
+    l3 = n == 1 and len(restored) == 1 and restored[0].endswith("rollout-1.jsonl")
+    # collect_sources drops them before any code path sees them
+    scans = os.path.join(OUT, "scans-cred")
+    os.makedirs(os.path.join(scans, "h"), exist_ok=True)
+    with open(os.path.join(scans, "h", "events.h.jsonl"), "w", encoding="utf-8") as fh:
+        for p in paths + [good_path]:
+            fh.write(json.dumps({"src": p}) + "\n")
+    srcs, _ = ledger_archive.collect_sources(scans, "h")
+    l4 = srcs == {good_path}
+    # ssh path: only credential-like paths remain, so no ssh process may start
+    import subprocess as sp
+    calls = []
+    real_run, real_popen = sp.run, sp.Popen
+
+    def spy(*a, **k):
+        calls.append(a[0])
+        raise RuntimeError("ssh must not be called")
+    sp.run, sp.Popen = spy, spy
+    remote = ["/home/u/.codex/auth.json", "/home/u/.claude/.credentials.json", "/home/u/x/credentials.json", "/home/u/x/token.json", "/home/u/x/x.pem", "/home/u/x/x.key", "/home/u/.env", "/home/u/.ssh/config", "/home/u/.aws/credentials"]
+    logs = []
+    try:
+        res = arch.archive_ssh("h", {"ssh": "user@host"}, remote, log=logs.append)
+    finally:
+        sp.run, sp.Popen = real_run, real_popen
+    arch.close()
+    l5 = res == (0, 0, 0) and not calls and any("%d credential-like" % len(remote) in x for x in logs)
+    good = l1 and l2 and l3 and l4 and l5
+    print("archive-cred: local dropped %s, index refuses %s, restore skips %s, collect_sources drops %s, ssh never starts %s  %s" % (l1, l2, l3, l4, l5, "OK" if good else "FAIL"))
+    return good
+
+
+
 def check_study_url(compiled):
     """#11: the 'Read the study' link renders only for an absolute https URL. javascript:, data:, protocol-relative,
     http: and whitespace-wrapped values (from STUDY_URL or the report config) are dropped with a warning and never
@@ -598,6 +820,7 @@ def check_study_url(compiled):
     if not good:
         print(r.stderr[-400:])
     return good
+
 
 
 def check_package_sensitivity(compiled):
@@ -652,6 +875,7 @@ def check_package_sensitivity(compiled):
     return good, pkg
 
 
+
 def check_unattributed(compiled, pkg):
     """#18: no shipped or drafted accounts file carries a catch-all rule; the fixture calls that match no rule appear as
     their own `unattributed` row (billing unknown) in summary.json, the dashboard and the study, with the count stated."""
@@ -699,7 +923,11 @@ def main():
     ok = check_persistence_consent() and ok
     ok = check_shared_predicates() and ok
     ok = check_archive_boundaries() and ok
+    ok = check_terminal_cleaning() and ok
+    ok = check_credential_exclusion() and ok
     ok = check_private_permissions() and ok
+    ok = check_generic_root_guard() and ok
+    ok = check_private_run_files() and ok
     ok = check_study_url(compiled) and ok
     pkg_ok, default_pkg = check_package_sensitivity(compiled)
     ok = pkg_ok and ok

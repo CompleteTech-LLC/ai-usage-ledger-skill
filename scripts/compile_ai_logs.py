@@ -21,6 +21,60 @@ import time
 from collections import defaultdict
 from datetime import datetime, timezone
 
+# safety.py holds the shared predicates; this file is also copied alone to SSH hosts (run_pipeline.py scp's only the
+# scanner), so when the module is not beside us the same two rules are applied by the fallbacks below.
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import safety as _safety
+except ImportError:  # standalone copy on a remote host
+    _safety = None
+
+_FALLBACK_CRED_BASENAMES = ("auth.json", ".credentials.json", "credentials.json", ".env", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa")
+_FALLBACK_CRED_PATTERNS = re.compile(r"(?:^|[^a-z])(?:token|secret|credential|password|passwd|apikey|api_key)(?:[^a-z]|$)|\.pem$|\.key$|\.p12$|\.pfx$|^\.env\.|^id_rsa|^id_ed25519", re.IGNORECASE)
+_FALLBACK_CRED_DIRS = {".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker"}
+_FALLBACK_BROAD_DIRS = {"", "appdata", "roaming", "local", ".config", ".local", "share", "documents", "desktop", "downloads", "users", "home", "library", "application support"}
+
+
+def is_credential_file(path):
+    """True for anything that looks like a credential, key or secret store: never read by the generic sniffer."""
+    if _safety is not None:
+        return _safety.is_credential_file(path)
+    p = str(path or "").replace("\\", "/")
+    base = p.rstrip("/").split("/")[-1]
+    if base.lower() in _FALLBACK_CRED_BASENAMES or _FALLBACK_CRED_PATTERNS.search(base):
+        return True
+    return any(part in _FALLBACK_CRED_DIRS for part in p.split("/")[:-1])
+
+
+def check_generic_root(path):
+    """A generic-sniffer root must be one tool's own directory, never a home, drive root or broad container
+    (AppData, .config, Documents ...): every JSON file below it will be read. Raises SystemExit when refused."""
+    if _safety is not None:
+        return _safety.check_generic_root(path)
+    p = str(path or "").replace("\\", "/").rstrip("/")
+    home = os.path.expanduser("~").replace("\\", "/").rstrip("/")
+    norm = p.lower()
+    if norm in ("", home.lower()) or re.fullmatch(r"[a-z]:", norm) or norm in ("/", "/home", "/users", "/root", "/mnt", "/srv", "/opt", "/var", "/tmp"):
+        raise SystemExit("generic root %r is a home, drive or system root; point it at the tool's own directory" % p)
+    parts = [x for x in norm.split("/") if x]
+    if (parts[-1] if parts else "") in _FALLBACK_BROAD_DIRS:
+        raise SystemExit("generic root %r is a broad directory; point it at the tool's own directory below it" % p)
+    return p
+
+
+class _NullWriter:
+    """Prompt sink when prompt capture is off: nothing is kept."""
+
+    def write(self, _text):
+        return 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 # ----------------------------------------------------------------------------
 # helpers
 # ----------------------------------------------------------------------------
@@ -1019,8 +1073,13 @@ def _walk_usage(node, ctx, found, depth=0):
 
 def scan_generic(root, host, out, stats, session_meta, out_prompts, tool):
     """Best-effort reader for tools without a dedicated parser (pi, codebuff, droid, amp, LM Studio, ...).
-    Reads every .json/.jsonl under root and emits one event per usage-shaped object. Verify on a sample."""
+    Reads every .json/.jsonl under root and emits one event per usage-shaped object. Verify on a sample.
+    Credential-looking files (auth.json, *token*, *.pem, .env* ...) are never opened; returns how many were skipped."""
+    skipped = 0
     for path in walk_files(root, lambda f: f.endswith(".json") or f.endswith(".jsonl")):
+        if is_credential_file(path):
+            skipped += 1
+            continue
         stats.files += 1
         try:
             size = os.path.getsize(path)
@@ -1067,32 +1126,49 @@ def scan_generic(root, host, out, stats, session_meta, out_prompts, tool):
             stats.events += 1
             n_ev += 1
         session_meta.append({"tool": tool, "host": host, "session": sid, "file": path, "bytes": size, "kind": "main", "calls": n_ev})
+    return skipped
 
 
 # ----------------------------------------------------------------------------
 # scan command
 # ----------------------------------------------------------------------------
 
+def _generic_specs(specs):
+    """'<tool>=<dir>' entries (a bare '<dir>' is tool 'generic'), every root validated before anything is read."""
+    pairs = []
+    for spec in specs or []:
+        tool, _, root = spec.partition("=")
+        if not root:
+            tool, root = "generic", tool
+        check_generic_root(root)
+        pairs.append((tool, root))
+    return pairs
+
+
 def cmd_scan(a):
+    generic = _generic_specs(a.generic_root)  # refuses a home, drive root or broad directory before anything is opened or written
     os.makedirs(a.out_dir, exist_ok=True)
     stats = Stats()
     session_meta = []
     seen = set()
     inventory = []
+    capture = not getattr(a, "no_prompts", False)
     ev_path = os.path.join(a.out_dir, "events.%s.jsonl" % a.host)
     pr_path = os.path.join(a.out_dir, "prompts.%s.jsonl" % a.host)
-    with open(ev_path, "w", encoding="utf-8") as out, open(pr_path, "w", encoding="utf-8") as outp:
+    if not capture and os.path.exists(pr_path):  # a file left by an earlier opt-in run must not be ingested as this run's
+        os.remove(pr_path)
+    with open(ev_path, "w", encoding="utf-8") as out, (open(pr_path, "w", encoding="utf-8") if capture else _NullWriter()) as outp:
         for root in a.claude_root or []:
             n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_claude(root, a.host, out, stats, seen, session_meta)
-            np_ = scan_claude_history(root, a.host, outp)
+            np_ = scan_claude_history(root, a.host, outp) if capture else 0  # history.jsonl holds only prompt text: not opened when capture is off
             inventory.append({"tool": "claude-code", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0, "prompts": np_})
             stats.log("claude root done %s" % root)
         for root in a.codex_root or []:
             n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             rows = load_codex_threads(root)
             scan_codex(root, a.host, out, stats, session_meta, rows)
-            np_ = scan_codex_history(root, a.host, outp)
+            np_ = scan_codex_history(root, a.host, outp) if capture else 0
             inventory.append({"tool": "codex", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0, "prompts": np_,
                               "sqlite_threads": len(rows), "sqlite_tokens_used": sum((r.get("tokens_used") or 0) for r in rows.values())})
             stats.log("codex root done %s" % root)
@@ -1143,20 +1219,18 @@ def cmd_scan(a):
             n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_continue(root, a.host, out, stats, session_meta, outp)
             inventory.append({"tool": "continue", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
-        for spec in a.generic_root or []:
-            tool, _, root = spec.partition("=")
-            if not root:
-                tool, root = "generic", tool
+        for tool, root in generic:
             n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
-            scan_generic(root, a.host, out, stats, session_meta, outp, tool)
-            inventory.append({"tool": tool, "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0, "note": "generic usage sniffer; verify on a sample"})
+            skipped = scan_generic(root, a.host, out, stats, session_meta, outp, tool)
+            inventory.append({"tool": tool, "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0,
+                              "credential_files_skipped": skipped, "note": "generic usage sniffer; %d credential-like files skipped; verify on a sample" % skipped})
     with open(os.path.join(a.out_dir, "sessions.%s.jsonl" % a.host), "w", encoding="utf-8") as f:
         for s in session_meta:
             f.write(json.dumps(s) + "\n")
     with open(os.path.join(a.out_dir, "inventory.%s.json" % a.host), "w", encoding="utf-8") as f:
         json.dump({"host": a.host, "roots": inventory, "files": stats.files, "bytes": stats.bytes, "lines": stats.lines,
                    "events": stats.events, "json_errors": stats.errors, "codex_replay_skipped": stats.skipped_replay,
-                   "dedup_skipped": stats.dedup, "seconds": round(time.time() - stats.t0, 1)}, f, indent=2)
+                   "dedup_skipped": stats.dedup, "prompts_captured": capture, "seconds": round(time.time() - stats.t0, 1)}, f, indent=2)
     stats.log("DONE")
 
 
@@ -1672,7 +1746,8 @@ def main():
     s.add_argument("--kimi-root", action="append", help="Kimi Code data dir (~/.kimi or ~/.kimi-code)")
     s.add_argument("--vibe-root", action="append", help="Mistral Vibe home (~/.vibe)")
     s.add_argument("--continue-root", action="append", help="Continue home (~/.continue)")
-    s.add_argument("--generic-root", action="append", help="<tool>=<dir>: best-effort usage sniffing over JSON/JSONL (pi, codebuff, droid, amp, lmstudio, ...)")
+    s.add_argument("--generic-root", action="append", help="<tool>=<dir>: best-effort usage sniffing over JSON/JSONL (pi, codebuff, droid, amp, lmstudio, ...); the dir must be the tool's own directory, never a home, drive root or AppData/.config; credential-looking files are skipped")
+    s.add_argument("--no-prompts", action="store_true", help="do not record prompt text: no prompts.<host>.jsonl is written and prompt-only history files are not opened (run_pipeline passes this unless the manifest sets capture_prompts: true)")
     s.add_argument("--out-dir", required=True)
     s.set_defaults(fn=cmd_scan)
     r = sub.add_parser("report")

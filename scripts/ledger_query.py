@@ -29,6 +29,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import ledger_store  # noqa: E402
+import safety  # noqa: E402
 
 NUM = ("input_uncached", "cache_read", "cache_write", "cache_write_5m", "cache_write_1h", "output", "reasoning", "total")
 SUMS = "COUNT(*) AS calls, SUM(input_uncached) AS input_uncached, SUM(cache_read) AS cache_read, SUM(cache_write) AS cache_write, SUM(output) AS output, SUM(reasoning) AS reasoning, SUM(total) AS total, COUNT(DISTINCT session) AS sessions, ROUND(SUM(COALESCE(cost_usd,0)),4) AS logged_cost_usd"
@@ -159,7 +160,17 @@ def emit(cols, rows, fmt, out=sys.stdout):
         w.writerow(cols)
         w.writerows(rows)
     else:
-        srow = [[("" if v is None else ("{:,}".format(v) if isinstance(v, int) and not isinstance(v, bool) and abs(v) >= 10000 else str(v))) for v in r] for r in rows]
+        # table mode goes straight to a terminal: text cells (prompts, cwd, session, archive snippets) are data from the
+        # tools' logs, so escape sequences and control characters are stripped and line breaks flattened to one line
+        def cell(v):
+            if v is None:
+                return ""
+            if isinstance(v, int) and not isinstance(v, bool) and abs(v) >= 10000:
+                return "{:,}".format(v)
+            if isinstance(v, str):
+                return safety.clean_for_terminal(v, limit=400).replace("\n", " ").replace("\t", " ")
+            return str(v)
+        srow = [[cell(v) for v in r] for r in rows]
         widths = [max([len(c)] + [len(r[i]) for r in srow]) for i, c in enumerate(cols)]
         widths = [min(w, 60) for w in widths]
         line = "  ".join(c.ljust(widths[i])[:widths[i]] for i, c in enumerate(cols))
@@ -190,23 +201,30 @@ def main():
         print("%-16s %s" % ("logs", "regex search inside the archived raw logs (needs archive.raw_logs)"))
         return 0
     kind, path, archive, accounts = a.store_kind, a.store_path, a.archive, a.accounts
-    if not (kind and path) or not archive or not accounts:
-        try:
-            import ledger
-            cfg = ledger.load_config()
-        except Exception:
-            cfg = None
-        if cfg:
-            kind = kind or cfg["store"]["kind"]
-            path = path or cfg["store"]["path"]
-            archive = archive or (cfg.get("archive") or {}).get("path")
-            accounts = accounts or cfg.get("accounts_path")
+    try:
+        import ledger
+        cfg = ledger.load_config()
+    except Exception:
+        cfg = None
+    if cfg:
+        kind = kind or cfg["store"]["kind"]
+        path = path or cfg["store"]["path"]
+        archive = archive or (cfg.get("archive") or {}).get("path")
+        accounts = accounts or cfg.get("accounts_path")
+    # prompt text is stored only after the operator opted in (prompts.capture=y); until then the prompts table is
+    # empty by design, so say so instead of answering "0 rows". An explicit --store-path is queried as given.
+    capture_off = cfg is not None and not a.store_path and not ((cfg.get("prompts") or {}).get("capture"))
+    if a.preset in ("prompts", "prompt-count") and capture_off:
+        print("prompt capture is off (prompts.capture=n): no prompt text is stored, only counts and tokens; enable it with `ledger.py init --set prompts.capture=y` and run again")
+        return 0
     if a.preset == "logs":
         import ledger_archive
         if not archive or not os.path.isdir(archive):
             raise SystemExit("no archive directory; enable archive.raw_logs at onboarding or pass --archive")
         if not a.arg:
             raise SystemExit("logs needs a pattern")
+        if capture_off:
+            sys.stderr.write("note: prompt capture is off; `logs` searches the archived raw files (archive.raw_logs), which is a separate opt-in from the prompts table\n")
         ar = ledger_archive.Archive(archive)
         hits = list(ar.grep(a.arg, a.host, a.since, a.until, a.project, a.limit))
         emit(["ts", "host", "path", "line", "snippet"], [(h["ts"], h["host"], h["path"], h["line"], h["snippet"]) for h in hits], a.format)

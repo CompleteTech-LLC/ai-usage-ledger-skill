@@ -24,7 +24,9 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 ANSWERS = [
     "none",
     "Northwind Trading Co.", "NORTHWIND TRADING CO.", "Ship it, measure it", "northwind.example · ops@northwind.example", "",
-    "#1E3A8A", "Northwind Trading Co. · internal ledger", "system", "sqlite", "", "America/New_York", "y", "y", "y", "n", "y", "y", "y", "daily", "03:00", "mon",
+    "#1E3A8A", "Northwind Trading Co. · internal ledger", "system", "sqlite", "", "America/New_York", "y", "y", "y", "n", "y",
+    "n",  # prompts.capture: prompt text stays out of the store unless asked for
+    "y", "y", "daily", "03:00", "mon",
     "ops@build.northwind.example", "",  # one SSH host, then stop
 ]
 
@@ -106,7 +108,7 @@ python3 scripts/ledger.py init --yes \\
   --set "brand.tagline=Ship it, measure it" --set "brand.contact=northwind.example · ops@northwind.example" \\
   --set brand.accent=#1E3A8A --set theme=system --set store.kind=sqlite --set timezone=America/New_York \\
   --set detect.all_profiles=y --set detect.wsl=y --set accounts.from_credentials=y --set accounts.identifiable=n \\
-  --set anonymize.on_every_run=y --set archive.raw_logs=y \\
+  --set anonymize.on_every_run=y --set prompts.capture=n --set archive.raw_logs=y \\
   --set schedule.frequency=daily --set schedule.time=03:00
 python3 scripts/ledger.py run
 ```

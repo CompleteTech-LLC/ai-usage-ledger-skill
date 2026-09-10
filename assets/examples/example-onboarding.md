@@ -29,6 +29,7 @@ Probe WSL distros on Windows? (y/n) [y]: y
 Read credential files (auth.json, .claude.json) to label accounts with their plan? Tokens are never kept. (y/n) [n]: y
 Keep e-mail addresses and organisation names in accounts.json? (n = pseudonymous account ids only) (y/n) [n]: n
 Also build an anonymised copy for publication on every run? (y/n) [n]: y
+Record the text of your prompts (what you typed to each agent) in the store, so `query prompts` can search it? n keeps counts and tokens only. (y/n) [n]: n
 Archive the raw log files themselves (every transcript the scanners read), so they outlive the tools' retention? (y/n) [n]: y
 Compress the archive with gzip? (y/n; n keeps files re-scannable in place) [y]: y
 Refresh automatically? (none / daily / weekly / monthly) [none]: daily
@@ -58,7 +59,7 @@ The saved preferences (`~/.ai-usage-ledger/config.json`, salt omitted):
 ```json
 {
   "version": 1,
-  "initialized_at": "2026-09-10T02:11:48+00:00",
+  "initialized_at": "2026-09-10T03:58:13+00:00",
   "home": "~/.ai-usage-ledger",
   "store": {
     "kind": "sqlite",
@@ -104,7 +105,11 @@ The saved preferences (`~/.ai-usage-ledger/config.json`, salt omitted):
   ],
   "accounts": {
     "from_credentials": true,
-    "identifiable": false
+    "identifiable": false,
+    "explicit": true
+  },
+  "prompts": {
+    "capture": false
   },
   "archive": {
     "raw_logs": true,
@@ -129,7 +134,7 @@ python3 scripts/ledger.py init --yes \
   --set "brand.tagline=Ship it, measure it" --set "brand.contact=northwind.example · ops@northwind.example" \
   --set brand.accent=#1E3A8A --set theme=system --set store.kind=sqlite --set timezone=America/New_York \
   --set detect.all_profiles=y --set detect.wsl=y --set accounts.from_credentials=y --set accounts.identifiable=n \
-  --set anonymize.on_every_run=y --set archive.raw_logs=y \
+  --set anonymize.on_every_run=y --set prompts.capture=n --set archive.raw_logs=y \
   --set schedule.frequency=daily --set schedule.time=03:00
 python3 scripts/ledger.py run
 ```

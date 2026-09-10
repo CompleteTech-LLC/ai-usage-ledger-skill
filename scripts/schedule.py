@@ -31,11 +31,14 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import safety  # noqa: E402
+
 TASK_NAME = "AI Usage Ledger"
 MARK = "# ai-usage-ledger"
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
-HERE = os.path.dirname(os.path.abspath(__file__))
 WEEKDAYS = {"mon": ("MON", 1), "tue": ("TUE", 2), "wed": ("WED", 3), "thu": ("THU", 4), "fri": ("FRI", 5), "sat": ("SAT", 6), "sun": ("SUN", 0)}
 
 
@@ -105,7 +108,8 @@ def _run(cmd, dry_run=False, input_text=None):
         return 0, ""
     r = subprocess.run(cmd, capture_output=True, text=True, input=input_text)
     if r.returncode != 0:
-        sys.stderr.write((r.stderr or r.stdout or "").strip() + "\n")
+        # schtasks / crontab / ssh output is untrusted for the terminal: no escape sequences, no C0 controls
+        sys.stderr.write(safety.clean_for_terminal((r.stderr or r.stdout or "").strip()) + "\n")
     return r.returncode, r.stdout
 
 
@@ -317,19 +321,20 @@ def status(home):
         want = ("Task To Run", "Schedule Type", "Start Time", "Days", "Last Run Time", "Last Result", "Next Run Time", "Status")
         for line in r.stdout.splitlines():
             if any(line.strip().startswith(w) for w in want):
-                print("  " + line.strip())
+                print("  " + safety.clean_for_terminal(line.strip(), limit=500))
         return 0
     lines = [x for x in crontab_lines() if MARK in x]
     if not lines:
         print("cron entry: not installed")
         return 1
     for x in lines:
-        print("  " + x)
+        print("  " + safety.clean_for_terminal(x, limit=500))
     log = os.path.join(home, "logs", "run.log")
     if os.path.isfile(log):
         with open(log, encoding="utf-8", errors="replace") as fh:
             tail = fh.readlines()[-3:]
-        print("  last log lines: " + "".join(tail).strip().replace("\n", " | "))
+        # the run log holds subprocess output from every host; it is data, not something the terminal may interpret
+        print("  last log lines: " + safety.clean_for_terminal("".join(tail).strip().replace("\n", " | "), limit=1000))
     return 0
 
 
