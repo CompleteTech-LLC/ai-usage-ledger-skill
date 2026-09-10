@@ -292,13 +292,20 @@ def check_credential_minimisation():
     # publish-check: an identifiable accounts file and a package mentioning its e-mail are caught; the anonymised fixture output is not
     pkg = os.path.join(home, "pkg")
     os.makedirs(pkg, exist_ok=True)
-    open(os.path.join(pkg, "USAGE_REPORT.md"), "w", encoding="utf-8").write("Report for person@corp.example (account abcdef12, Secret Org) on host lighthouse, see auth.json\n")
+    open(os.path.join(pkg, "USAGE_REPORT.md"), "w", encoding="utf-8").write("Report for person@corp.example (account abcdef12, Secret Org) on host lighthouse, see /home/alice/.codex/auth.json\n")
+    open(os.path.join(pkg, "notes.json"), "w", encoding="utf-8").write('{"access_token": "SECRET-ACCESS-VALUE"}\n')
+    import zipfile
+    with zipfile.ZipFile(os.path.join(home, "pkg.zip"), "w") as z:
+        z.write(os.path.join(pkg, "USAGE_REPORT.md"), "pkg/USAGE_REPORT.md")
     json.dump({"accounts": {"codex:abcdef12": a_id}, "rules": []}, open(os.path.join(home, "accounts.json"), "w", encoding="utf-8"))
     r3 = run([PY, ledger, "publish-check", pkg], env=env)
-    caught = r3.returncode == 1 and "e-mail address" in r3.stdout and "credential file reference" in r3.stdout and ("organisation name" in r3.stdout or "account id prefix" in r3.stdout or "account key" in r3.stdout)
+    caught = (r3.returncode == 1 and "e-mail address" in r3.stdout and "credential file path" in r3.stdout and "secret-bearing key" in r3.stdout and "SECRET-ACCESS-VALUE" not in r3.stdout
+              and ("organisation name" in r3.stdout or "account id prefix" in r3.stdout or "account key" in r3.stdout))
+    rz = run([PY, ledger, "publish-check", os.path.join(home, "pkg.zip")], env=env)
+    caught = caught and rz.returncode == 1 and "e-mail address" in rz.stdout
     clean_dir = os.path.join(home, "clean")
     os.makedirs(clean_dir, exist_ok=True)
-    open(os.path.join(clean_dir, "USAGE_REPORT.md"), "w", encoding="utf-8").write("host-1a2b3c: 1,510 calls, example@example.com placeholder only\n")
+    open(os.path.join(clean_dir, "USAGE_REPORT.md"), "w", encoding="utf-8").write("host-1a2b3c: 1,510 calls, example@example.com placeholder only. Claude Code keeps its login in `.claude.json`; auth.json is never copied.\n")
     r4 = run([PY, ledger, "publish-check", clean_dir], env=env)
     clean = r4.returncode == 0
     good = default_ok and warned and minimised and extract_ok and caught and clean

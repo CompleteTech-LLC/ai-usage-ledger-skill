@@ -308,7 +308,8 @@ def read_codex_account(codex_root, identifiable=False):
     return {"id": "codex:%s" % (acct or "api-key"), "provider": "openai", "label": email or ("API key" if has_api_key and not acct else "ChatGPT account %s" % acct),
             "emails": [email] if email else [], "chatgpt_account_id_prefix": acct, "orgs": orgs, "plan_type": plan,
             "plan": {"pro": "ChatGPT Pro", "plus": "ChatGPT Plus", "team": "ChatGPT Team", "business": "ChatGPT Business", "enterprise": "ChatGPT Enterprise"}.get(plan, "usage-based (API key)" if has_api_key and not plan else (plan or "unknown")),
-            "monthly_usd": {"pro": 200, "plus": 20, "team": 30, "business": 30}.get(plan, 0), "evidence": "%s (last_refresh %s)" % (p, last_refresh)}
+            "monthly_usd": {"pro": 200, "plus": 20, "team": 30, "business": 30}.get(plan, 0),
+            "evidence": ("%s (last_refresh %s)" % (p, last_refresh)) if identifiable else ("auth.json on this host (last_refresh %s)" % last_refresh)}
 
 
 def read_claude_account(home, identifiable=False):
@@ -344,7 +345,7 @@ def read_claude_account(home, identifiable=False):
         pseudo = hashlib.sha256(email.lower().encode("utf-8")).hexdigest()[:8]
         key = ("claude:%s" % email.lower().replace("@", "-at-").replace(".", "-")) if identifiable else ("claude:%s" % pseudo)
         return {"id": key, "provider": "anthropic", "label": email if identifiable else "Claude account %s" % pseudo, "emails": [email] if identifiable else [], "plan": plan, "monthly_usd": monthly,
-                "evidence": "%s oauthAccount (%s, %s)" % (p, org_type, tier)}
+                "evidence": ("%s oauthAccount (%s, %s)" % (p, org_type, tier)) if identifiable else (".claude.json on this host (%s, %s)" % (org_type, tier))}
     return None
 
 

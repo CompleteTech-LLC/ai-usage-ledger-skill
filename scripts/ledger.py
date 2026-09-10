@@ -60,7 +60,7 @@ def load_config():
     import safety
     safety.refuse_if_shared(p, "ledger config")
     with open(p, encoding="utf-8") as fh:
-        return json.load(fh)
+        return migrate_config(json.load(fh))
 
 
 def save_config(cfg):
@@ -205,10 +205,23 @@ def ask(prompt, default, choices=None):
         return val
 
 
+def migrate_config(cfg):
+    """Add keys introduced after the config was written, so older homes keep working."""
+    cfg.setdefault("accounts", {"from_credentials": False, "identifiable": False})
+    cfg.setdefault("anonymize", {"on_every_run": False, "salt": secrets.token_hex(16)})
+    cfg.setdefault("archive", {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")})
+    cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon", "installed_at": None})
+    cfg.setdefault("detect", {"all_profiles": False, "wsl": True, "on_every_run": True})
+    cfg.setdefault("branding", dict(DEFAULT_BRAND))
+    cfg.setdefault("extra_hosts", [])
+    return cfg
+
+
 def onboard(args):
     cfg = load_config() if not args.reinit else None
     fresh = cfg is None
-    cfg = cfg or default_config()
+    cfg = migrate_config(cfg or default_config())
+    prev_accounts_pref = dict(cfg.get("accounts") or {})
     if getattr(args, "brand_preset", None):
         set_dotted(cfg, "brand.preset", args.brand_preset)
     for kv in args.set or []:
@@ -244,8 +257,14 @@ def onboard(args):
     if fresh or not os.path.isfile(cfg["pricing_path"]):
         with open(os.path.join(SKILL, "templates", "pricing.json"), encoding="utf-8") as fh:
             safety.write_private(cfg["pricing_path"], fh.read())
+    pref_changed = (cfg.get("accounts") or {}) != prev_accounts_pref
     if fresh or not os.path.isfile(cfg["accounts_path"]) or args.reinit:
         write_json_private(cfg["accounts_path"], accounts)
+    elif pref_changed:
+        backup = cfg["accounts_path"] + ".before-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+        shutil.copy(cfg["accounts_path"], backup)
+        write_json_private(cfg["accounts_path"], accounts)
+        print("accounts.json redrafted because the credential preferences changed; the previous file is kept at %s" % backup)
     write_manifest(cfg, hosts)
     write_report_config(cfg)
     if fresh or not cfg.get("initialized_at"):
@@ -598,55 +617,87 @@ IDENTITY_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 def publish_check(target, accounts_path=None, extra_terms=()):
     """Scan a directory (or file) that is about to leave the machine for e-mails, account identifiers, organisation
     names, credential-file paths and known host names. Returns a list of (file, kind, snippet)."""
-    terms = {}
+    # each term is a compiled pattern: identifiers need boundaries so an 8-digit account prefix does not match inside
+    # a number and a host name does not match inside an unrelated word; host names match case-sensitively
+    terms = []
+
+    def add(kind, value, boundary=None, flags=re.IGNORECASE):
+        v = str(value or "").strip()
+        if len(v) < 4:
+            return
+        pat = re.escape(v)
+        if boundary == "alnum":
+            pat = r"(?<![0-9A-Za-z])" + pat + r"(?![0-9A-Za-z])"
+        elif boundary == "word":
+            pat = r"\b" + pat + r"\b"
+        terms.append((kind, re.compile(pat, flags)))
+
     if accounts_path and os.path.isfile(accounts_path):
         try:
             with open(accounts_path, encoding="utf-8") as fh:
                 AC = json.load(fh)
             for key, v in (AC.get("accounts") or {}).items():
                 for e in v.get("emails") or []:
-                    terms[e.lower()] = "account e-mail"
+                    add("account e-mail", e)
                 for o in v.get("orgs") or []:
-                    if o and len(str(o)) > 3:
-                        terms[str(o).lower()] = "organisation name"
+                    add("organisation name", o, "word")
                 if v.get("chatgpt_account_id_prefix"):
-                    terms[v["chatgpt_account_id_prefix"].lower()] = "account id prefix"
+                    add("account id prefix", v["chatgpt_account_id_prefix"], "alnum")
                 if ":" in key and not key.endswith((":provider", ":usage-based", ":api-keys")):
-                    terms[key.lower()] = "account key"
+                    add("account key", key, "alnum")
         except Exception:
             pass
     for t in extra_terms:
-        if t:
-            terms[str(t).lower()] = "operator term"
-    cred_markers = ("auth.json", ".credentials.json", ".claude.json", "id_token", "access_token", "OPENAI_API_KEY")
+        add("host name or operator term", t, "word", 0)
+    # a credential *file* counts only when it appears as a path (a separator before the name); generic documentation
+    # that merely names `.claude.json` is not a leak. Secret-bearing keys count anywhere and are reported without values.
+    cred_path_re = re.compile(r"[\\/][^\s\"'`<>]{0,200}?(auth\.json|\.credentials\.json|\.claude\.json)\b", re.IGNORECASE)
+    secret_key_re = re.compile(r"\b(id_token|access_token|refresh_token|OPENAI_API_KEY|ANTHROPIC_API_KEY|api_key)\b\s*[\"':=]", re.IGNORECASE)
     findings = []
-    files = []
+    texts = []  # (display name, text)
+    binary = (".png", ".pdf", ".docx", ".sqlite", ".gz", ".db", ".jpg", ".jpeg", ".ico", ".woff", ".woff2", ".ttf")
+
+    def add_file(path):
+        if path.lower().endswith(binary):
+            return
+        if path.lower().endswith(".zip"):
+            import zipfile
+            try:
+                with zipfile.ZipFile(path) as z:
+                    for info in z.infolist():
+                        if info.is_dir() or info.filename.lower().endswith(binary):
+                            continue
+                        texts.append((path + "!" + info.filename, z.read(info).decode("utf-8", "replace")))
+            except zipfile.BadZipFile:
+                findings.append((path, "unreadable archive", "not a zip file"))
+            return
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                texts.append((path, fh.read()))
+        except OSError:
+            pass
+
     if os.path.isdir(target):
         for dp, _, fns in os.walk(target):
-            files += [os.path.join(dp, f) for f in fns]
+            for fn in fns:
+                add_file(os.path.join(dp, fn))
     else:
-        files = [target]
-    for f in files:
-        if f.lower().endswith((".png", ".pdf", ".docx", ".zip", ".sqlite", ".gz", ".db")):
-            continue
-        try:
-            with open(f, encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-        except OSError:
-            continue
-        low = text.lower()
+        add_file(target)
+    for f, text in texts:
         for m in IDENTITY_RE.finditer(text):
             if not m.group(0).lower().endswith(("example.com", "example.net", "example.org")):
                 findings.append((f, "e-mail address", m.group(0)))
                 break
-        for term, kind in terms.items():
-            i = low.find(term)
-            if i >= 0:
-                findings.append((f, kind, text[max(0, i - 30):i + len(term) + 30].replace("\n", " ")))
-        for c in cred_markers:
-            i = low.find(c.lower())
-            if i >= 0:
-                findings.append((f, "credential file reference", text[max(0, i - 40):i + len(c) + 20].replace("\n", " ")))
+        for kind, rx in terms:
+            m = rx.search(text)
+            if m:
+                findings.append((f, kind, text[max(0, m.start() - 30):m.end() + 30].replace("\n", " ")))
+        m = cred_path_re.search(text)
+        if m:
+            findings.append((f, "credential file path", "path ending in %s (value not shown)" % m.group(1)))
+        m = secret_key_re.search(text)
+        if m:
+            findings.append((f, "secret-bearing key", "%s present (value not shown)" % m.group(1)))
     return findings
 
 
@@ -666,7 +717,7 @@ def do_publish_check(args):
             pass
     findings = publish_check(target, cfg["accounts_path"] if cfg else None, hosts + list(args.term or []))
     if not findings:
-        print("publish-check: no e-mail, account identifier, organisation name, host name or credential-file reference found under %s" % target)
+        print("publish-check: no e-mail, account identifier, organisation name, host name, credential-file path or secret-bearing key found in %s" % target)
         return 0
     seen = set()
     for f, kind, snip in findings:
@@ -674,7 +725,8 @@ def do_publish_check(args):
         if k in seen:
             continue
         seen.add(k)
-        print("%-28s %s\n    %s" % (kind, os.path.relpath(f, target) if os.path.isdir(target) else f, snip.strip()[:140]))
+        shown = os.path.relpath(f, target) if os.path.isdir(target) and not f.startswith(target + "!") else f
+        print("%-28s %s\n    %s" % (kind, shown, snip.strip()[:140]))
     print("publish-check: %d finding(s); this content identifies people, accounts or machines. Use the anonymised copy (ledger.py run --anonymize) before publishing." % len(seen))
     return 1
 

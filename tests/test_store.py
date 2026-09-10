@@ -153,6 +153,10 @@ def check_cli(scan_dir):
     if not good:
         sys.stdout.write(r3.stdout[-2000:])
     ok = ok and good
+    pc = run([py, ledger, "publish-check", anon], env=env, check=False)
+    pc_good = pc.returncode == 0
+    print("publish-check on the anonymised tree: %s" % ("OK" if pc_good else "FAIL\n" + pc.stdout[-800:]))
+    ok = ok and pc_good
     e2 = run([py, ledger, "export", "--anonymize", "--format", "jsonl", "--out", os.path.join(OUT, "anon.jsonl")], env=env)
     txt = open(os.path.join(OUT, "anon.jsonl"), encoding="utf-8").read()
     good = "wrote %d" % n in e2.stdout and "fixture" not in txt and "src" not in txt and "host-" in txt
