@@ -535,6 +535,66 @@ def check_shared_predicates():
     return good
 
 
+def check_followups_1_5_9():
+    """Codex on #25: purge keeps rows whose file could not be removed and works in either storage mode; status
+    reports the post-purge archive; a legacy config's implicit WSL default is withdrawn; archive dirs are dedicated."""
+    import tempfile
+    import ledger_archive
+    base = tempfile.mkdtemp(prefix="ledger-fu-")
+    # archive created compressed, then opened uncompressed: the legacy credential row must still be purged correctly
+    ar = ledger_archive.Archive(os.path.join(base, "arch"), compress=True)
+    os.makedirs(os.path.join(ar.path, "h1", "home", "u", ".codex"), exist_ok=True)
+    open(os.path.join(ar.path, "h1", "home", "u", ".codex", "auth.json.gz"), "wb").write(b"x")
+    ar.db.execute("INSERT INTO files (host, path, rel, size, mtime, sha256, archived_at) VALUES ('h1','/home/u/.codex/auth.json','home/u/.codex/auth.json',1,0,'s','t')")
+    ar.db.commit()
+    ar.close()
+    ar2 = ledger_archive.Archive(os.path.join(base, "arch"), compress=False)
+    hidden = not any(f["path"].endswith("auth.json") for f in ar2.list("h1"))
+    purged, unrem = ar2.purge_credential_rows()
+    gone = purged == 1 and unrem == 0 and not os.path.exists(os.path.join(ar2.path, "h1", "home", "u", ".codex", "auth.json.gz")) and ar2.db.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 0
+    ar2.close()
+    # status output describes the post-purge archive
+    r = run([PY, os.path.join(SCRIPTS, "ledger_archive.py"), "--archive", os.path.join(base, "arch"), "status"])
+    st = json.loads(r.stdout) if r.returncode == 0 else {}
+    status_ok = r.returncode == 0 and "credential_rows_purged" in st and sum(h["files"] for h in st.get("hosts", [])) == 0
+    # a non-empty, unrelated directory is refused as an archive root; a fresh one gets the marker
+    other = os.path.join(base, "documents")
+    os.makedirs(other)
+    open(os.path.join(other, "thesis.docx"), "w").write("x")
+    refused = _raises(lambda: ledger_archive.Archive(other))
+    fresh = ledger_archive.Archive(os.path.join(base, "fresh"))
+    marker = os.path.isfile(os.path.join(fresh.path, ".ai-usage-ledger-archive"))
+    fresh.close()
+    # legacy config: implicit wsl=True is withdrawn; an explicit choice survives
+    home = os.path.join(base, "home")
+    env = dict(os.environ, AI_USAGE_LEDGER_HOME=home)
+    run([PY, os.path.join(SCRIPTS, "ledger.py"), "init", "--yes", "--set", "detect.all_profiles=n"], env=env)
+    cfgp = os.path.join(home, "config.json")
+    c = json.load(open(cfgp, encoding="utf-8"))
+    c["version"] = 1
+    c["detect"] = {"all_profiles": False, "wsl": True, "on_every_run": True}
+    json.dump(c, open(cfgp, "w", encoding="utf-8"))
+    s1 = run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
+    c1 = json.load(open(cfgp, encoding="utf-8"))  # status only reads; migration is applied on load, persisted on next save
+    migrated = "migrated" in s1.stderr and c1["detect"]["wsl"] is True  # file untouched until a save
+    r2 = run([PY, os.path.join(SCRIPTS, "ledger.py"), "init", "--yes"], env=env)
+    c2 = json.load(open(cfgp, encoding="utf-8"))
+    withdrawn = r2.returncode == 0 and c2["detect"]["wsl"] is False and c2.get("version") == 2
+    c2["version"] = 1
+    c2["detect"] = {"all_profiles": False, "wsl": True, "on_every_run": True, "explicit": True}
+    json.dump(c2, open(cfgp, "w", encoding="utf-8"))
+    run([PY, os.path.join(SCRIPTS, "ledger.py"), "init", "--yes"], env=env)
+    c3 = json.load(open(cfgp, encoding="utf-8"))
+    kept = c3["detect"]["wsl"] is True
+    good = hidden and gone and status_ok and refused and marker and migrated and withdrawn and kept
+    print("followups: legacy row hidden %s / purged in other mode %s, status post-purge %s, unrelated dir refused %s / marker %s, legacy wsl withdrawn %s (explicit kept %s)  %s" % (
+        hidden, gone, status_ok, refused, marker, withdrawn, kept, "OK" if good else "FAIL"))
+    if not good:
+        print(r.stdout[-300:], r.stderr[-300:], s1.stderr[-200:], r2.stderr[-200:])
+    shutil.rmtree(base, ignore_errors=True)
+    return good
+
+
 def check_examples_self_contained():
     bad = []
     for fn in ("example.html", "example-study.html"):
@@ -922,6 +982,7 @@ def main():
     ok = check_credential_minimisation() and ok
     ok = check_persistence_consent() and ok
     ok = check_shared_predicates() and ok
+    ok = check_followups_1_5_9() and ok
     ok = check_archive_boundaries() and ok
     ok = check_terminal_cleaning() and ok
     ok = check_credential_exclusion() and ok
