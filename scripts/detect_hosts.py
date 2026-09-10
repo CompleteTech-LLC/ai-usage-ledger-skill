@@ -376,7 +376,7 @@ def draft_accounts(hosts, read_credentials=False, identifiable=False, warn=True)
                 key = "codex:%s" % h["name"]
                 registry.setdefault(key, {"provider": "openai", "label": "Codex login on %s" % h["name"], "plan": "unknown (set the plan and monthly_usd, or re-run init with accounts.from_credentials=y)", "monthly_usd": 0,
                                           "evidence": "placeholder; credential files were not read"})
-                rules.append({"when": {"tool": "codex", "host": h["name"]}, "account": key, "billing": "subscription", "confidence": "low", "why": "placeholder per host; credential files were not read"})
+                rules.append({"when": {"tool": "codex", "host": h["name"]}, "account": key, "billing": "unknown", "confidence": "low", "why": "placeholder per host; credential files were not read, so the billing is unknown until the plan is filled in"})
         for root in h.get("claude_roots", []):
             home = os.path.dirname(pref + root if pref else root)
             a = read_claude_account(home, identifiable) if read_credentials else None
@@ -387,7 +387,7 @@ def draft_accounts(hosts, read_credentials=False, identifiable=False, warn=True)
                 key = "claude:%s" % h["name"]
                 registry.setdefault(key, {"provider": "anthropic", "label": "Claude Code login on %s" % h["name"], "plan": "unknown (set the plan and monthly_usd, or re-run init with accounts.from_credentials=y)", "monthly_usd": 0,
                                           "evidence": "placeholder; credential files were not read"})
-                rules.append({"when": {"tool": "claude-code", "host": h["name"]}, "account": key, "billing": "subscription", "confidence": "low", "why": "placeholder per host; credential files were not read"})
+                rules.append({"when": {"tool": "claude-code", "host": h["name"]}, "account": key, "billing": "unknown", "confidence": "low", "why": "placeholder per host; credential files were not read, so the billing is unknown until the plan is filled in"})
     rules.insert(0, {"when": {"tool": "codex", "plan": "self_serve_business_usage_based"}, "account": "codex:usage-based", "billing": "usage-based", "confidence": "high",
                      "why": "the call itself is stamped usage-based; assign it to the right org in this file if you know it"})
     registry.setdefault("codex:usage-based", {"provider": "openai", "label": "Codex usage-based org", "plan": "usage-based", "monthly_usd": 0, "evidence": "rate_limits.plan_type on the calls"})
@@ -400,7 +400,8 @@ def draft_accounts(hosts, read_credentials=False, identifiable=False, warn=True)
     rules.append({"when": {}, "account": "codex:usage-based", "billing": "unknown", "confidence": "low", "why": "fallback"})
     src = ("credential files (identity claims only%s)" % (", identifiable" if identifiable else ", minimised: no e-mails or organisation names")) if read_credentials else "host names only (no credential file was read)"
     return {"_comment": "Drafted by detect_hosts.py from %s. Review labels, prices and rules; first match wins. This file names accounts: it is written owner-only and is not copied into study packages unless package_accounts is true." % src,
-            "_sensitivity": "account metadata" if read_credentials else "placeholders", "accounts": registry, "rules": rules}
+            "_sensitivity": "account metadata" if read_credentials else "placeholders",
+            "_source": ("credential files, identifiable" if identifiable else "credential files, minimised") if read_credentials else "host placeholders", "accounts": registry, "rules": rules}
 
 
 def main():

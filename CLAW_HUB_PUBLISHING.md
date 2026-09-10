@@ -50,6 +50,8 @@ The audit of 1.5.4 flagged credential-file access and retention of e-mails and o
 
 The audit of 1.5.5 classified the optional scheduled task as cross-session persistence (T06). 1.5.6 separates it from onboarding entirely (no configuration key can register it), requires a typed confirmation or an operator-written consent record tied to a hash of the exact configuration (wrapper, schedule, hosts, roots, flags), demands a second acknowledgement for high-impact schedules (raw-log archive, SSH, WSL, other profiles), discloses everything including storage impact and the removal command before asking, warns about entries it will replace, and adds an optional expiry after which the scheduled run removes itself.
 
+Codex's review of the 1.5.6 branch added: scheduled runs pinned to the consented manifest and flags (`run --scheduled`), DOCX and PDF inspected by `publish-check` (or reported unscannable), legacy credential-derived `accounts.json` redrafted under the recorded preference, placeholder accounts billed as unknown rather than subscription, report and dashboard narrative reflecting how accounts were drafted, `SHA256SUMS` covering optional package files, short host and organisation names still checked, and the scheduler lookup deferred until after consent.
+
 ## Local Readiness Check
 
 Run before publishing:

@@ -2,7 +2,7 @@
 name: ai-usage-ledger
 description: >-
   Compile every locally recorded AI coding-agent model call (Claude Code, Codex CLI/Desktop, GitHub Copilot CLI, Gemini CLI, opencode, OpenClaw, Cline/Roo/Kilo, aider, Kimi Code, Mistral Vibe, Continue, pi, Codebuff and any JSON-logging tool) across all drives, user profiles, WSL distros and SSH hosts into one append-only, de-duplicated ledger stored as SQLite, JSON or CSV; price it at list API rates; split it by subscription account and billing plan; validate it against the tools' own counters; and render a branded light/dark dashboard plus a research-grade study package. Onboards once (branding, theme, storage backend, scheduled refresh, anonymised publication copy; hosts and accounts auto-detected per OS), remembers the preferences, refreshes with one command or on a schedule, renders fifteen ledger documents (statements, memos, briefs, billing evidence) as Markdown, HTML, PDF and DOCX, can anonymise everything for publication, optionally archives the raw log files themselves so they outlive the tools' retention, and answers detailed questions (per day, project, account, model, session, prompt text, or inside the archived logs) through a query layer over the accumulated store. Use when asked to "find all my AI logs", "how many tokens did I use", "what would this have cost on the API", "compare my subscriptions", "usage by account", "cache savings", "set up my usage ledger", "monthly usage statement", "publish my usage anonymously", "how much did I use last Tuesday", "which sessions cost the most", "when did I first use model X", "find the session where I asked about Y", or to refresh an existing ledger.
-version: 1.5.6
+version: 1.5.7
 metadata:
   openclaw:
     skillKey: ai-usage-ledger
@@ -137,7 +137,7 @@ metadata:
 | What is configured and stored | `python3 scripts/ledger.py status` |
 | Export the store | `python3 scripts/ledger.py export --table events --format csv --out events.csv` (`json`, `jsonl`; tables `events`, `sessions`, `prompts`) |
 | Start over | `python3 scripts/ledger.py reinit` |
-| Identity scan before sharing | `python3 scripts/ledger.py publish-check <package or directory> [--term extra]` (exit 1 on findings) |
+| Identity scan before sharing | `python3 scripts/ledger.py publish-check <package, directory, zip, DOCX or PDF> [--term extra]` (exit 1 on findings; a PDF needs `pypdf`, otherwise it is reported as unscannable rather than approved) |
 | Anonymised copy for publication | `python3 scripts/ledger.py run --anonymize` (or `--set anonymize.on_every_run=y` at onboarding); outputs under `<workdir>/anonymized/`; `ledger.py export --anonymize` for tables |
 | List ledger documents | `python3 scripts/ledger.py doc --list [--stage finance] [--type memo]` |
 | Render a document | `python3 scripts/ledger.py doc --template monthly-usage-statement --var prepared_for="Finance" --var month=2026-08 --pdf --docx` |
@@ -246,7 +246,8 @@ Accounts in `query` come from the same `accounts.json` rules the report uses (`a
 | Linux, WSL, macOS | One crontab line tagged `# ai-usage-ledger` running `run-ledger.sh`; macOS may need Full Disk Access for cron. |
 | Logging | Each run appends to `~/.ai-usage-ledger/logs/run.log`; `ledger.py status` shows the entry and the last log lines. |
 | Consent | Onboarding never registers persistence, and no configuration key can. `schedule install` prints the disclosure (wrapper, schedule, every host and root it will read, archive and anonymise flags, output directories, storage used so far, the removal command) and then needs a typed `yes` on a terminal, plus `yes, I understand` when the schedule is high-impact (raw-log archive, SSH, WSL or other profiles). Without a terminal the operator writes `~/.ai-usage-ledger/schedule-consent.json` from `schedule consent` (approver, timestamp, hash of the exact configuration, high-impact acknowledgement); install refuses when the hash no longer matches. An agent must not write that file on the operator's behalf. |
-| Expiry | `schedule install --expires YYYY-MM-DD` makes the scheduled run stop and remove the entry after that date. |
+| Expiry | `schedule install --expires YYYY-MM-DD` makes the scheduled run stop and remove the entry after that date; the saved schedule state is cleared when it does. |
+| Pinned to the consent | The wrapper runs `ledger.py run --scheduled`: no host re-detection, and the run refuses if the manifest (hosts, roots), flags or schedule no longer hash to the consented configuration, so a scheduled run can never read something the operator did not review. |
 | Existing entries | An existing task or cron line is reported before it is replaced. |
 
 ## Definitions

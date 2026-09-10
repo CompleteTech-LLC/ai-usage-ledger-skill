@@ -1215,6 +1215,22 @@ def price_event(e, pricing):
     return cost, nocache, priced_as, assumed
 
 
+def account_source(AC):
+    """How accounts.json was drafted: its own _source, else inferred from _sensitivity (files from 1.5.5/1.5.6), else unknown."""
+    if not AC:
+        return None
+    if AC.get("_source"):
+        return AC["_source"]
+    sens = AC.get("_sensitivity")
+    if sens == "placeholders":
+        return "host placeholders"
+    if sens == "account metadata":
+        return "credential files"
+    if any((v.get("emails") or v.get("orgs")) for v in (AC.get("accounts") or {}).values() if isinstance(v, dict)):
+        return "credential files, identifiable"
+    return "unspecified"
+
+
 def load_accounts(path):
     if not path or not os.path.isfile(path):
         return None
@@ -1464,6 +1480,19 @@ def cmd_report(a):
 
     # -------- per-account subscription vs API-equivalent
     acct_reg = (AC or {}).get("accounts", {})
+    acct_billing = {}
+    for r in by_account_host:  # (account, host, tool) rows carry no billing; derive it from the rules that produce each account
+        acct_billing.setdefault(r["account"], set())
+    for rule in (AC or {}).get("rules", []):
+        acct_billing.setdefault(rule.get("account"), set()).add(rule.get("billing") or "unknown")
+
+    def billing_of(account):
+        b = acct_billing.get(account) or set()
+        if b == {"unknown"} or not b:
+            return "unknown"
+        if "usage-based" in b and "subscription" not in b:
+            return "usage-based"
+        return "subscription" if "subscription" in b else sorted(b)[0]
     acct_rows = []
     acct_tot = {}
     for r in by_account_month:
@@ -1471,10 +1500,10 @@ def cmd_report(a):
             continue
         reg = acct_reg.get(r["account"], {})
         monthly = reg.get("monthly_usd", 0) or 0
-        acct_rows.append({"month": r["month"], "account": r["account"], "label": reg.get("label", r["account"]), "plan": reg.get("plan", "?"),
+        acct_rows.append({"month": r["month"], "account": r["account"], "label": reg.get("label", r["account"]), "plan": reg.get("plan", "?"), "billing": billing_of(r["account"]),
                           "subscription_usd": monthly, "calls": r["calls"], "total": r["total"], "api_equivalent_usd": round(r["api_cost_usd"], 2),
                           "api_if_uncached_usd": round(r["cost_if_uncached_usd"], 2), "api_to_sub_ratio": round(r["api_cost_usd"] / monthly, 2) if monthly else None})
-        t = acct_tot.setdefault(r["account"], {"label": reg.get("label", r["account"]), "plan": reg.get("plan", "?"), "provider": reg.get("provider"), "months": 0, "subscription_usd": 0.0, "api_equivalent_usd": 0.0, "api_if_uncached_usd": 0.0, "calls": 0, "total": 0})
+        t = acct_tot.setdefault(r["account"], {"label": reg.get("label", r["account"]), "plan": reg.get("plan", "?"), "provider": reg.get("provider"), "billing": billing_of(r["account"]), "months": 0, "subscription_usd": 0.0, "api_equivalent_usd": 0.0, "api_if_uncached_usd": 0.0, "calls": 0, "total": 0})
         t["months"] += 1
         t["subscription_usd"] += monthly
         t["api_equivalent_usd"] += r["api_cost_usd"]
@@ -1487,7 +1516,7 @@ def cmd_report(a):
     # usage-based (real spend) by month and account: re-derive from by_billing_month for the total and by_plan for the codex business calls
     ub_month = [r for r in by_billing_month if r["billing"] == "usage-based" and r["month"] != "?"]
     with open(os.path.join(a.out_dir, "subscription_vs_api_by_account.csv"), "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["month", "account", "label", "plan", "subscription_usd", "calls", "total", "api_equivalent_usd", "api_if_uncached_usd", "api_to_sub_ratio"])
+        w = csv.DictWriter(f, fieldnames=["month", "account", "label", "plan", "billing", "subscription_usd", "calls", "total", "api_equivalent_usd", "api_if_uncached_usd", "api_to_sub_ratio"], extrasaction="ignore")
         w.writeheader()
         w.writerows(sorted(acct_rows, key=lambda r: (r["account"], r["month"])))
 
@@ -1618,7 +1647,7 @@ def cmd_report(a):
             "inventory": inventories,
             "costs": {"subscription_rows": sub_rows, "subscription_totals": sub_tot, "assumed_models": assumed_models,
                       "pricing": pricing},
-            "accounts": {"registry": acct_reg, "rules": (AC or {}).get("rules", []), "by_account": by_account, "by_account_month": by_account_month,
+            "accounts": {"registry": acct_reg, "rules": (AC or {}).get("rules", []), "source": account_source(AC), "by_account": by_account, "by_account_month": by_account_month,
                          "by_account_host": by_account_host, "by_plan": by_plan, "by_billing_month": by_billing_month,
                          "subscription_rows": acct_rows, "subscription_totals": acct_tot},
         }, f)

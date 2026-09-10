@@ -13,7 +13,7 @@ Part of the CompleteTech LLC agentic services skill library. Where the `agentic-
 ## OpenClaw / ClawHub Metadata
 
 - Skill key: `ai-usage-ledger`
-- Version-ready metadata: `1.5.6`
+- Version-ready metadata: `1.5.7`
 - Homepage: https://github.com/CompleteTech-LLC/ai-usage-ledger-skill
 - README: https://github.com/CompleteTech-LLC/ai-usage-ledger-skill#readme
 - Runtime binaries: `python3`

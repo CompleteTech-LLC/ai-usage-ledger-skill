@@ -26,6 +26,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -47,7 +48,7 @@ def wrapper_path(home):
     return os.path.join(home, "run-ledger.cmd" if IS_WIN else "run-ledger.sh")
 
 
-RUN_FLAGS = {"anonymize": "--anonymize", "archive": "--archive"}  # the only options a scheduled run may carry
+RUN_FLAGS = {"anonymize": "--anonymize", "archive": "--archive"}  # the only options a scheduled run may carry (plus --scheduled and --until)
 CONSENT_FILE = "schedule-consent.json"
 
 
@@ -63,7 +64,7 @@ def wrapper_body(home, python, flags=(), expires=None):
     log = os.path.join(home, "logs", "run.log")
     for v, what in ((home, "ledger home"), (python, "python path")):
         _check_plain(v, what)
-    args = [RUN_FLAGS[f] for f in flags if f in RUN_FLAGS]
+    args = ["--scheduled"] + [RUN_FLAGS[f] for f in flags if f in RUN_FLAGS]
     if expires:
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(expires)):
             raise SystemExit("expires must be YYYY-MM-DD")
@@ -109,7 +110,10 @@ def _run(cmd, dry_run=False, input_text=None):
 
 
 def crontab_lines():
-    r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    try:
+        r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    except (FileNotFoundError, OSError):
+        return []
     if r.returncode != 0:
         return []
     return [line for line in r.stdout.splitlines()]
@@ -118,16 +122,21 @@ def crontab_lines():
 def material_config(home, python, frequency, time_, weekday, flags, expires, manifest=None):
     """Everything that decides what the scheduled run will do; its hash ties a consent to exactly this."""
     hosts = []
+    manifest_sha = None
     if manifest and os.path.isfile(manifest):
         try:
             with open(manifest, encoding="utf-8") as fh:
-                for h in json.load(fh).get("hosts", []):
-                    roots = {k: v for k, v in h.items() if k.endswith("_roots") or k.endswith("_dbs")}
-                    hosts.append({"name": h.get("name"), "kind": h.get("kind", "local"), "ssh": h.get("ssh"), "distro": h.get("distro"), "roots": roots})
+                M = json.load(fh)
+            # the whole manifest, normalised, is part of the consent: workdir, package_accounts, interpreters,
+            # pricing/accounts paths and every host field, not just a summary of the roots
+            manifest_sha = hashlib.sha256(json.dumps(M, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
+            for h in M.get("hosts", []):
+                roots = {k: v for k, v in h.items() if k.endswith("_roots") or k.endswith("_dbs")}
+                hosts.append({"name": h.get("name"), "kind": h.get("kind", "local"), "ssh": h.get("ssh"), "distro": h.get("distro"), "roots": roots})
         except Exception:
             pass
     return {"home": home, "python": python, "frequency": frequency, "time": time_, "weekday": weekday, "flags": sorted(flags), "expires": expires,
-            "wrapper": wrapper_body(home, python, flags, expires), "hosts": hosts}
+            "wrapper": wrapper_body(home, python, flags, expires), "hosts": hosts, "manifest_sha": manifest_sha}
 
 
 def config_hash(mat):
@@ -214,7 +223,10 @@ def check_consent(home, mat):
 
 def existing_entry():
     if IS_WIN:
-        r = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, text=True)
+        try:
+            r = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, text=True)
+        except (FileNotFoundError, OSError):
+            return None
         return TASK_NAME if r.returncode == 0 else None
     lines = [x for x in crontab_lines() if MARK in x]
     return lines[0] if lines else None
@@ -229,9 +241,10 @@ def install(home, python, frequency, time_, weekday="mon", flags=(), dry_run=Fal
         return remove(home, dry_run)
     mat = material_config(home, python, frequency, time_, weekday, flags, expires, manifest)
     print(disclosure(home, mat, workdir))
-    prior = existing_entry()
-    if prior:
-        print("  NOTE: an entry already exists (%s) and will be replaced." % prior)
+    scheduler = "schtasks" if IS_WIN else "crontab"
+    if not shutil.which(scheduler):
+        print("Not installed: the scheduler command `%s` is not available on this system, so nothing was written or recorded." % scheduler)
+        return 4
     ok, why = check_consent(home, mat)
     if not ok:
         interactive = consent == "ask" and sys.stdin.isatty() and sys.stdout.isatty()
@@ -253,6 +266,9 @@ def install(home, python, frequency, time_, weekday="mon", flags=(), dry_run=Fal
             write_consent(home, mat, os.environ.get("USERNAME") or os.environ.get("USER") or "operator", ack)
     else:
         print("  consent: %s" % why)
+    prior = existing_entry()  # looked up only once consent is settled, and tolerant of a missing scheduler binary
+    if prior:
+        print("  NOTE: an entry already exists (%s) and will be replaced." % prior)
     wrapper = write_wrapper(home, python, flags, expires) if not dry_run else wrapper_path(home)
     if IS_WIN:
         cmd = ["schtasks", "/Create", "/F", "/TN", TASK_NAME, "/TR", '"%s"' % wrapper, "/ST", "%02d:%02d" % (hh, mm)]

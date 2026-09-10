@@ -148,7 +148,12 @@ def check_cli(scan_dir):
             leaks += sum(txt.count(needle) for needle in ("fixture", "example@example.com", FX.replace("\\", "/"), FX))
     anon_pkgs = [d for d in os.listdir(os.path.join(anon, "reports")) if d.endswith(".zip")] if os.path.isdir(os.path.join(anon, "reports")) else []
     anon_rows = sum(1 for _ in open(os.path.join(anon, "compiled", "all_events.csv"), encoding="utf-8")) - 1 if os.path.isfile(os.path.join(anon, "compiled", "all_events.csv")) else 0
-    good = checked == 4 and leaks == 0 and anon_rows == n and bool(anon_pkgs) and os.path.isfile(os.path.join(home, "anonymize-map.json"))
+    src_kept = False
+    try:
+        src_kept = "_source" in json.load(open(os.path.join(anon, "accounts.json"), encoding="utf-8")) or "_source" not in json.load(open(cfg["accounts_path"], encoding="utf-8"))
+    except Exception:
+        pass
+    good = checked == 4 and leaks == 0 and anon_rows == n and bool(anon_pkgs) and os.path.isfile(os.path.join(home, "anonymize-map.json")) and src_kept
     print("anonym:  %d files checked, %d leaks, %d rows, package %s, map %s  %s" % (checked, leaks, anon_rows, "yes" if anon_pkgs else "no", "yes" if os.path.isfile(os.path.join(home, "anonymize-map.json")) else "no", "OK" if good else "FAIL"))
     if not good:
         sys.stdout.write(r3.stdout[-2000:])
