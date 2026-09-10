@@ -67,7 +67,9 @@ def load_config():
         changed = False
         mp = cfg.get("manifest_path")
         try:
-            if not (cfg.get("detect") or {}).get("wsl") and mp and os.path.isfile(mp):
+            if not (cfg.get("detect") or {}).get("wsl") and mp:
+                if not os.path.isfile(mp):  # a configured manifest that is absent right now may reappear: not reconciled yet
+                    raise FileNotFoundError(mp)
                 with open(mp, encoding="utf-8") as fh:
                     m = json.load(fh)
                 kept = [h for h in m.get("hosts", []) if h.get("kind") != "wsl"]

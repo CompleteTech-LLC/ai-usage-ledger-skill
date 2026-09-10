@@ -672,6 +672,9 @@ def check_followups_1_5_9():
     json.dump(c7, open(cfgp, "w", encoding="utf-8"))
     run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
     retry_pending = json.load(open(cfgp, encoding="utf-8")).get("version") == 2
+    os.remove(mpath)  # an absent configured manifest is not reconciled either
+    run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
+    retry_pending = retry_pending and json.load(open(cfgp, encoding="utf-8")).get("version") == 2
     json.dump(mj, open(mpath, "w", encoding="utf-8"))  # repaired: the next load prunes the WSL host
     run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
     m7 = json.load(open(mpath, encoding="utf-8"))
