@@ -209,6 +209,55 @@ def check_branding_and_pages(compiled):
     return good
 
 
+def check_credential_minimisation():
+    """Credential files are read only on request, identity is minimised by default, and publish-check finds leaks."""
+    import tempfile
+    import detect_hosts
+    home = tempfile.mkdtemp(prefix="ledger-cred-")
+    env = dict(os.environ, AI_USAGE_LEDGER_HOME=home)
+    ledger = os.path.join(SCRIPTS, "ledger.py")
+    r1 = run([PY, ledger, "init", "--yes", "--set", "detect.wsl=n", "--set", "detect.all_profiles=n"], env=env)
+    acc = json.load(open(os.path.join(home, "accounts.json"), encoding="utf-8"))
+    blob = json.dumps(acc)
+    default_ok = r1.returncode == 0 and "Reading credential files" not in r1.stderr and "@" not in blob and acc.get("_sensitivity") == "placeholders" and "auth.json (last_refresh" not in blob
+    # opt in, minimised: a warning names the files, and no e-mail or organisation title is retained
+    r2 = run([PY, ledger, "init", "--yes", "--set", "accounts.from_credentials=y", "--set", "accounts.identifiable=n"], env=env)
+    acc2 = json.load(open(os.path.join(home, "accounts.json"), encoding="utf-8"))
+    blob2 = json.dumps(acc2)
+    warned = "Reading credential files" in r2.stderr and "minimised" in r2.stderr
+    minimised = r2.returncode == 0 and "@" not in blob2 and all(not v.get("emails") and not v.get("orgs") for v in acc2["accounts"].values())
+    # a synthetic credential file proves the extraction keeps only the claims, and only the identifiable ones on request
+    fake_root = os.path.join(home, "fakecodex")
+    os.makedirs(fake_root, exist_ok=True)
+    import base64
+    claims = {"https://api.openai.com/auth": {"chatgpt_account_id": "abcdef1234567890", "chatgpt_plan_type": "pro", "organizations": [{"title": "Secret Org"}]}, "https://api.openai.com/profile": {"email": "person@corp.example"}}
+    tok = "h." + base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=") + ".s"
+    json.dump({"tokens": {"id_token": tok, "access_token": "SECRET-ACCESS", "refresh_token": "SECRET-REFRESH"}, "last_refresh": "2026-09-01T00:00:00Z"}, open(os.path.join(fake_root, "auth.json"), "w", encoding="utf-8"))
+    a_min = detect_hosts.read_codex_account(fake_root, identifiable=False)
+    a_id = detect_hosts.read_codex_account(fake_root, identifiable=True)
+    extract_ok = (a_min and a_min["id"] == "codex:abcdef12" and a_min["plan"] == "ChatGPT Pro" and not a_min["emails"] and not a_min["orgs"] and "SECRET" not in json.dumps(a_min)
+                  and a_id and a_id["emails"] == ["person@corp.example"] and a_id["orgs"] == ["Secret Org"] and "SECRET" not in json.dumps(a_id))
+    # publish-check: an identifiable accounts file and a package mentioning its e-mail are caught; the anonymised fixture output is not
+    pkg = os.path.join(home, "pkg")
+    os.makedirs(pkg, exist_ok=True)
+    open(os.path.join(pkg, "USAGE_REPORT.md"), "w", encoding="utf-8").write("Report for person@corp.example (account abcdef12, Secret Org) on host lighthouse, see auth.json\n")
+    json.dump({"accounts": {"codex:abcdef12": a_id}, "rules": []}, open(os.path.join(home, "accounts.json"), "w", encoding="utf-8"))
+    r3 = run([PY, ledger, "publish-check", pkg], env=env)
+    caught = r3.returncode == 1 and "e-mail address" in r3.stdout and "credential file reference" in r3.stdout and ("organisation name" in r3.stdout or "account id prefix" in r3.stdout or "account key" in r3.stdout)
+    clean_dir = os.path.join(home, "clean")
+    os.makedirs(clean_dir, exist_ok=True)
+    open(os.path.join(clean_dir, "USAGE_REPORT.md"), "w", encoding="utf-8").write("host-1a2b3c: 1,510 calls, example@example.com placeholder only\n")
+    r4 = run([PY, ledger, "publish-check", clean_dir], env=env)
+    clean = r4.returncode == 0
+    good = default_ok and warned and minimised and extract_ok and caught and clean
+    print("credentials: default init reads none %s, opt-in warns %s, minimised (no e-mail/org) %s, claim extraction %s, publish-check catches %s / passes clean %s  %s" % (
+        default_ok, warned, minimised, extract_ok, caught, clean, "OK" if good else "FAIL"))
+    if not good:
+        print(r1.stderr[-300:], r2.stderr[-400:], r3.stdout[-400:], r4.stdout[-200:])
+    shutil.rmtree(home, ignore_errors=True)
+    return good
+
+
 def check_neutral_branding():
     import tempfile
     home = tempfile.mkdtemp(prefix="ledger-neutral-")
@@ -365,6 +414,7 @@ def main():
     ok = check_branding_and_pages(compiled) and ok
     ok = check_examples_self_contained() and ok
     ok = check_neutral_branding() and ok
+    ok = check_credential_minimisation() and ok
     ok = check_archive_boundaries() and ok
     ok = check_private_permissions() and ok
     print("SECURITY OK" if ok else "SECURITY CHECKS FAILED")

@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 ANSWERS = [
     "none",
     "Northwind Trading Co.", "NORTHWIND TRADING CO.", "Ship it, measure it", "northwind.example · ops@northwind.example", "",
-    "#1E3A8A", "Northwind Trading Co. · internal ledger", "system", "sqlite", "", "America/New_York", "y", "y", "y", "y", "y", "daily", "03:00", "mon", "n",
+    "#1E3A8A", "Northwind Trading Co. · internal ledger", "system", "sqlite", "", "America/New_York", "y", "y", "y", "n", "y", "y", "y", "daily", "03:00", "mon", "n",
     "ops@build.northwind.example", "",  # one SSH host, then stop
 ]
 
@@ -55,7 +55,7 @@ def main():
     with open(os.path.join(ROOT, "examples", "accounts.fixtures.json"), encoding="utf-8") as fh:
         accounts = json.load(fh)
     detect_hosts.detect_hosts = lambda all_profiles=False, probe_wsl=True: (hosts, ["D:\\Users\\old-laptop is the same volume as an already detected profile (mapped drive or symlink); skipped"])
-    detect_hosts.draft_accounts = lambda hs: accounts
+    detect_hosts.draft_accounts = lambda hs, read_credentials=False, identifiable=False, warn=True: accounts
     ledger.detect_hosts = detect_hosts
 
     import builtins
@@ -105,7 +105,8 @@ python3 scripts/ledger.py init --yes \\
   --set "brand.name=Northwind Trading Co." --set "brand.eyebrow=NORTHWIND TRADING CO." \\
   --set "brand.tagline=Ship it, measure it" --set "brand.contact=northwind.example · ops@northwind.example" \\
   --set brand.accent=#1E3A8A --set theme=system --set store.kind=sqlite --set timezone=America/New_York \\
-  --set detect.all_profiles=y --set detect.wsl=y --set anonymize.on_every_run=y --set archive.raw_logs=y \\
+  --set detect.all_profiles=y --set detect.wsl=y --set accounts.from_credentials=y --set accounts.identifiable=n \\
+  --set anonymize.on_every_run=y --set archive.raw_logs=y \\
   --set schedule.frequency=daily --set schedule.time=03:00 --set schedule.install=n
 python3 scripts/ledger.py run
 ```

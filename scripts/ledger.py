@@ -13,6 +13,7 @@ ledger.py - the one entry point people and agents use day to day.
     python3 scripts/ledger.py archive status|list|grep|restore # the raw logs themselves (archive.raw_logs=y)
     python3 scripts/ledger.py query --presets                 # detailed questions over the store and the archive
     python3 scripts/ledger.py query by-project --since 2026-08-01 --tool codex
+    python3 scripts/ledger.py publish-check <dir> # identity scan before anything leaves the machine
     python3 scripts/ledger.py reinit          # fresh onboarding; the old store is kept aside with a timestamp
 
 Preferences (branding, storage backend, working directory, timezone, auto-detection) are captured once,
@@ -24,6 +25,7 @@ Standard library only.
 import argparse
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -135,6 +137,8 @@ QUESTIONS = [
     ("timezone", "Timezone for time-of-day analysis", lambda c: c["timezone"], None),
     ("detect.all_profiles", "Also scan other user profiles and other drives on this machine? (y/n)", lambda c: "y" if c["detect"]["all_profiles"] else "n", ["y", "n"]),
     ("detect.wsl", "Probe WSL distros on Windows? (y/n)", lambda c: "y" if c["detect"]["wsl"] else "n", ["y", "n"]),
+    ("accounts.from_credentials", "Read credential files (auth.json, .claude.json) to label accounts with their plan? Tokens are never kept. (y/n)", lambda c: "y" if c["accounts"]["from_credentials"] else "n", ["y", "n"]),
+    ("accounts.identifiable", "Keep e-mail addresses and organisation names in accounts.json? (n = pseudonymous account ids only) (y/n)", lambda c: "y" if c["accounts"]["identifiable"] else "n", ["y", "n"]),
     ("anonymize.on_every_run", "Also build an anonymised copy for publication on every run? (y/n)", lambda c: "y" if c["anonymize"]["on_every_run"] else "n", ["y", "n"]),
     ("archive.raw_logs", "Archive the raw log files themselves (every transcript the scanners read), so they outlive the tools' retention? (y/n)", lambda c: "y" if c["archive"]["raw_logs"] else "n", ["y", "n"]),
     ("archive.compress", "Compress the archive with gzip? (y/n; n keeps files re-scannable in place)", lambda c: "y" if c["archive"]["compress"] else "n", ["y", "n"]),
@@ -154,6 +158,7 @@ def default_config():
         "pricing_path": os.path.join(home_dir(), "pricing.json"), "accounts_path": os.path.join(home_dir(), "accounts.json"),
         "report_config_path": os.path.join(home_dir(), "report_config.json"), "manifest_path": os.path.join(home_dir(), "manifest.json"),
         "package_prefix": "AI_Usage_Ledger", "extra_hosts": [],
+        "accounts": {"from_credentials": False, "identifiable": False},
         "anonymize": {"on_every_run": False, "salt": secrets.token_hex(16)},
         "archive": {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")},
         "schedule": {"frequency": "none", "time": "03:00", "weekday": "mon", "install": False, "installed_at": None},
@@ -175,6 +180,8 @@ def set_dotted(cfg, key, value):
         cfg["store"]["path"] = os.path.join(home_dir(), {"sqlite": "ledger.sqlite", "json": "ledger-json", "csv": "ledger-csv"}[value])
     elif key.startswith("detect."):
         cfg["detect"][key[7:]] = value in ("y", "yes", "true", True)
+    elif key in ("accounts.from_credentials", "accounts.identifiable"):
+        cfg.setdefault("accounts", {"from_credentials": False, "identifiable": False})[key[9:]] = value in ("y", "yes", "true", True)
     elif key == "anonymize.on_every_run":
         cfg.setdefault("anonymize", {"salt": secrets.token_hex(16)})["on_every_run"] = value in ("y", "yes", "true", True)
     elif key in ("archive.raw_logs", "archive.compress"):
@@ -220,9 +227,10 @@ def onboard(args):
         print("  [%s] %s" % (h["name"], "; ".join(h.get("_found", []))[:400]))
     for n in notes:
         print("  note:", n)
-    accounts = detect_hosts.draft_accounts(hosts)
+    acc_pref = cfg.setdefault("accounts", {"from_credentials": False, "identifiable": False})
+    accounts = detect_hosts.draft_accounts(hosts, read_credentials=acc_pref.get("from_credentials", False), identifiable=acc_pref.get("identifiable", False))
     if interactive:
-        print("\nAccounts found (identity claims only):")
+        print("\nAccounts drafted (%s):" % ("from credential files" if acc_pref.get("from_credentials") else "placeholders; credential files were not read"))
         for k, v in accounts["accounts"].items():
             if v.get("provider") in ("openai", "anthropic"):
                 print("  %-28s %-34s %s" % (k, v.get("label"), v.get("plan")))
@@ -243,6 +251,7 @@ def onboard(args):
     write_report_config(cfg)
     if fresh or not cfg.get("initialized_at"):
         cfg["initialized_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    cfg.setdefault("accounts", {"from_credentials": False, "identifiable": False})
     cfg.setdefault("anonymize", {"on_every_run": False, "salt": secrets.token_hex(16)})
     cfg.setdefault("archive", {"raw_logs": False, "compress": True, "path": os.path.join(home_dir(), "archive")})
     cfg.setdefault("schedule", {"frequency": "none", "time": "03:00", "weekday": "mon", "install": False, "installed_at": None})
@@ -566,6 +575,93 @@ def do_query(args):
     return subprocess.run([sys.executable, os.path.join(HERE, "ledger_query.py")] + args.rest).returncode
 
 
+IDENTITY_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+
+def publish_check(target, accounts_path=None, extra_terms=()):
+    """Scan a directory (or file) that is about to leave the machine for e-mails, account identifiers, organisation
+    names, credential-file paths and known host names. Returns a list of (file, kind, snippet)."""
+    terms = {}
+    if accounts_path and os.path.isfile(accounts_path):
+        try:
+            with open(accounts_path, encoding="utf-8") as fh:
+                AC = json.load(fh)
+            for key, v in (AC.get("accounts") or {}).items():
+                for e in v.get("emails") or []:
+                    terms[e.lower()] = "account e-mail"
+                for o in v.get("orgs") or []:
+                    if o and len(str(o)) > 3:
+                        terms[str(o).lower()] = "organisation name"
+                if v.get("chatgpt_account_id_prefix"):
+                    terms[v["chatgpt_account_id_prefix"].lower()] = "account id prefix"
+                if ":" in key and not key.endswith((":provider", ":usage-based", ":api-keys")):
+                    terms[key.lower()] = "account key"
+        except Exception:
+            pass
+    for t in extra_terms:
+        if t:
+            terms[str(t).lower()] = "operator term"
+    cred_markers = ("auth.json", ".credentials.json", ".claude.json", "id_token", "access_token", "OPENAI_API_KEY")
+    findings = []
+    files = []
+    if os.path.isdir(target):
+        for dp, _, fns in os.walk(target):
+            files += [os.path.join(dp, f) for f in fns]
+    else:
+        files = [target]
+    for f in files:
+        if f.lower().endswith((".png", ".pdf", ".docx", ".zip", ".sqlite", ".gz", ".db")):
+            continue
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        low = text.lower()
+        for m in IDENTITY_RE.finditer(text):
+            if not m.group(0).lower().endswith(("example.com", "example.net", "example.org")):
+                findings.append((f, "e-mail address", m.group(0)))
+                break
+        for term, kind in terms.items():
+            i = low.find(term)
+            if i >= 0:
+                findings.append((f, kind, text[max(0, i - 30):i + len(term) + 30].replace("\n", " ")))
+        for c in cred_markers:
+            i = low.find(c.lower())
+            if i >= 0:
+                findings.append((f, "credential file reference", text[max(0, i - 40):i + len(c) + 20].replace("\n", " ")))
+    return findings
+
+
+def do_publish_check(args):
+    cfg = load_config()
+    target = args.path
+    if not target and cfg:
+        target = os.path.join(cfg["workdir"], "anonymized") if os.path.isdir(os.path.join(cfg["workdir"], "anonymized")) else os.path.join(cfg["workdir"], "reports")
+    if not target or not os.path.exists(target):
+        raise SystemExit("give a directory or file to check (e.g. the study package or the anonymised tree)")
+    hosts = []
+    if cfg:
+        try:
+            with open(cfg["manifest_path"], encoding="utf-8") as fh:
+                hosts = [h["name"] for h in json.load(fh).get("hosts", [])]
+        except Exception:
+            pass
+    findings = publish_check(target, cfg["accounts_path"] if cfg else None, hosts + list(args.term or []))
+    if not findings:
+        print("publish-check: no e-mail, account identifier, organisation name, host name or credential-file reference found under %s" % target)
+        return 0
+    seen = set()
+    for f, kind, snip in findings:
+        k = (f, kind)
+        if k in seen:
+            continue
+        seen.add(k)
+        print("%-28s %s\n    %s" % (kind, os.path.relpath(f, target) if os.path.isdir(target) else f, snip.strip()[:140]))
+    print("publish-check: %d finding(s); this content identifies people, accounts or machines. Use the anonymised copy (ledger.py run --anonymize) before publishing." % len(seen))
+    return 1
+
+
 def do_doc(args):
     cmd = [sys.executable, os.path.join(HERE, "render_ledger_doc.py")] + args.rest
     r = subprocess.run(cmd)
@@ -622,6 +718,10 @@ def main():
     qp = sub.add_parser("query", help="detailed questions over the store and archive (arguments pass through to ledger_query.py)")
     qp.add_argument("rest", nargs=argparse.REMAINDER)
     qp.set_defaults(fn=do_query)
+    pc = sub.add_parser("publish-check", help="scan a package, directory or file for e-mails, account ids, organisation names, host names and credential references before it leaves the machine")
+    pc.add_argument("path", nargs="?", help="default: the anonymised tree if present, else the reports directory")
+    pc.add_argument("--term", action="append", help="extra string that must not appear (repeatable)")
+    pc.set_defaults(fn=do_publish_check)
     dc = sub.add_parser("doc", help="render a ledger document; all arguments pass through to render_ledger_doc.py")
     dc.add_argument("rest", nargs=argparse.REMAINDER)
     dc.set_defaults(fn=do_doc)

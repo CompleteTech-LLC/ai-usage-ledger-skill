@@ -19,6 +19,7 @@
     "dark": {"bg": "#0F172A", "surface": "#1E293B", "surface-2": "#273449", "ink": "#F1F5F9", "ink-2": "#CBD5E1", "ink-3": "#94A3B8", "line": "#334155", "line-2": "#475569"}
   },
   "detect": {"all_profiles": true, "wsl": true, "on_every_run": true},
+  "accounts": {"from_credentials": true, "identifiable": false},
   "pricing_path": "/home/<you>/.ai-usage-ledger/pricing.json",
   "accounts_path": "/home/<you>/.ai-usage-ledger/accounts.json",
   "report_config_path": "/home/<you>/.ai-usage-ledger/report_config.json",

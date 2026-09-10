@@ -13,7 +13,7 @@ Part of the CompleteTech LLC agentic services skill library. Where the `agentic-
 ## OpenClaw / ClawHub Metadata
 
 - Skill key: `ai-usage-ledger`
-- Version-ready metadata: `1.5.4`
+- Version-ready metadata: `1.5.5`
 - Homepage: https://github.com/CompleteTech-LLC/ai-usage-ledger-skill
 - README: https://github.com/CompleteTech-LLC/ai-usage-ledger-skill#readme
 - Runtime binaries: `python3`
@@ -53,6 +53,7 @@ flowchart LR
 ## What It Does
 
 - Onboards once: brand, theme, storage backend, working directory and timezone are asked on first use (or passed as flags by an agent), stored, and never asked again; `reinit` starts over and keeps the old store.
+- Labels usage by account without touching credentials unless asked: per-host placeholders by default, or the account id prefix and plan type from the tools' credential files after an explicit opt-in and a warning, with e-mails and organisation names kept only on request.
 - Detects harness logs for the running OS automatically: Windows, macOS and Linux default directories, environment overrides, VS Code / Cursor / VSCodium / Windsurf global storage, every WSL distro, other user profiles and drives (same-volume mappings are recognised and skipped), plus SSH hosts you name.
 - Keeps an append-only ledger in SQLite, JSON (JSONL) or CSV with stable per-call ids, so re-running never double counts and the history survives the tools' own log retention.
 - Refreshes on a schedule when asked: onboarding offers daily / weekly / monthly and installs a Task Scheduler task or a crontab line that logs to the ledger home.
@@ -157,6 +158,7 @@ The committed examples use synthetic fixture data only; no real account or trans
 - Reports are neutral unless the operator chooses branding (a preset must be selected explicitly); an unconfigured `run` refuses rather than onboarding with defaults.
 - Everything the ledger keeps about its owner (config, store, archive, logs, anonymisation map) is created owner-only, and a config file others can edit is refused.
 - The raw-log archive validates host names and source paths, keeps every destination inside its root, and reaches SSH hosts with fixed commands fed a NUL-delimited file list.
+- Credential files are opened only when the operator opts in at onboarding, after a warning that names the files and fields; only the claims needed for attribution and pricing are kept, pseudonymously unless identifiable output is requested. `accounts.json` stays owner-only and out of study packages unless asked, and `ledger.py publish-check` scans anything about to be shared for e-mails, account ids, organisation names, host names and credential references.
 - `tests/test_security.py` keeps these properties under regression; the ClawHub audit findings for 1.5.0 and 1.5.1 are addressed in 1.5.1 and 1.5.2.
 
 ## Brand Notes

@@ -264,72 +264,129 @@ def jwt_claims(tok):
         return {}
 
 
-def read_codex_account(codex_root):
+CREDENTIAL_FILES = ("auth.json (Codex): chatgpt_account_id prefix, chatgpt_plan_type, last_refresh; with --identifiable also e-mail and organisation titles",
+                    ".claude.json (Claude Code): organizationRateLimitTier, organizationType; with --identifiable also the e-mail",
+                    ".claude/.credentials.json (Claude Code): subscriptionType only")
+
+
+def credential_warning(paths, identifiable):
+    """Say what is about to be read and what will be kept, before any credential file is opened."""
+    sys.stderr.write("Reading credential files to label accounts (%s). Tokens and keys are never kept or shown.\n" % ("identifiable: e-mails and organisation names retained" if identifiable else "minimised: pseudonymous account ids and plan types only"))
+    for line in CREDENTIAL_FILES:
+        sys.stderr.write("  %s\n" % line)
+    for p in paths:
+        sys.stderr.write("  file: %s\n" % p)
+
+
+def read_codex_account(codex_root, identifiable=False):
+    """Extract only the claims needed for attribution and pricing from Codex's auth.json.
+
+    Kept: an 8-character prefix of the ChatGPT account id (pseudonymous), the plan type, the refresh time.
+    Kept only with identifiable=True: e-mail and organisation titles. Tokens and API keys are never retained."""
     p = os.path.join(codex_root, "auth.json")
     if not os.path.isfile(p):
         return None
     try:
-        d = json.load(open(p, encoding="utf-8", errors="replace"))
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            d = json.load(fh)
     except Exception:
         return None
-    t = d.get("tokens") or {}
-    c = jwt_claims(t.get("id_token") or t.get("access_token") or "")
-    auth = c.get("https://api.openai.com/auth", {}) or {}
-    prof = c.get("https://api.openai.com/profile", {}) or {}
+    tokens = d.get("tokens") or {}
+    claims = jwt_claims(tokens.get("id_token") or tokens.get("access_token") or "")
+    has_api_key = bool(d.get("OPENAI_API_KEY"))
+    last_refresh = d.get("last_refresh")
+    del d, tokens  # drop the credential object as soon as the claims are out
+    auth = claims.get("https://api.openai.com/auth", {}) or {}
+    prof = claims.get("https://api.openai.com/profile", {}) or {}
     acct = (auth.get("chatgpt_account_id") or "")[:8]
     plan = auth.get("chatgpt_plan_type")
-    if not acct and not d.get("OPENAI_API_KEY"):
+    email = (prof.get("email") or claims.get("email")) if identifiable else None
+    orgs = [o.get("title") for o in auth.get("organizations", []) if isinstance(o, dict)] if identifiable else []
+    del claims, auth, prof
+    if not acct and not has_api_key:
         return None
-    return {"id": "codex:%s" % (acct or "api-key"), "provider": "openai", "label": prof.get("email") or c.get("email") or ("API key" if d.get("OPENAI_API_KEY") else acct),
-            "emails": [e for e in [prof.get("email") or c.get("email")] if e], "chatgpt_account_id_prefix": acct,
-            "orgs": [o.get("title") for o in auth.get("organizations", []) if isinstance(o, dict)], "plan_type": plan,
-            "plan": {"pro": "ChatGPT Pro", "plus": "ChatGPT Plus", "team": "ChatGPT Team", "business": "ChatGPT Business", "enterprise": "ChatGPT Enterprise"}.get(plan, "usage-based (API key)" if d.get("OPENAI_API_KEY") and not plan else (plan or "unknown")),
-            "monthly_usd": {"pro": 200, "plus": 20, "team": 30, "business": 30}.get(plan, 0), "evidence": "%s (last_refresh %s)" % (p, d.get("last_refresh"))}
+    return {"id": "codex:%s" % (acct or "api-key"), "provider": "openai", "label": email or ("API key" if has_api_key and not acct else "ChatGPT account %s" % acct),
+            "emails": [email] if email else [], "chatgpt_account_id_prefix": acct, "orgs": orgs, "plan_type": plan,
+            "plan": {"pro": "ChatGPT Pro", "plus": "ChatGPT Plus", "team": "ChatGPT Team", "business": "ChatGPT Business", "enterprise": "ChatGPT Enterprise"}.get(plan, "usage-based (API key)" if has_api_key and not plan else (plan or "unknown")),
+            "monthly_usd": {"pro": 200, "plus": 20, "team": 30, "business": 30}.get(plan, 0), "evidence": "%s (last_refresh %s)" % (p, last_refresh)}
 
 
-def read_claude_account(home):
+def read_claude_account(home, identifiable=False):
+    """Extract the plan tier from Claude Code's account files; the e-mail is kept only with identifiable=True,
+    otherwise the account is keyed by a short hash of it (stable, pseudonymous)."""
+    import hashlib
     for p in (os.path.join(home, ".claude.json"),):
         if not os.path.isfile(p):
             continue
         try:
-            d = json.load(open(p, encoding="utf-8", errors="replace"))
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                d = json.load(fh)
         except Exception:
             continue
         oa = d.get("oauthAccount") or {}
+        del d
         email = oa.get("emailAddress")
         if not email:
             continue
         tier = oa.get("organizationRateLimitTier") or ""
+        org_type = oa.get("organizationType")
+        del oa
         cred = os.path.join(home, ".claude", ".credentials.json")
         sub = None
         if os.path.isfile(cred):
             try:
-                sub = (json.load(open(cred, encoding="utf-8", errors="replace")).get("claudeAiOauth") or {}).get("subscriptionType")
+                with open(cred, encoding="utf-8", errors="replace") as fh:
+                    sub = (json.load(fh).get("claudeAiOauth") or {}).get("subscriptionType")
             except Exception:
                 pass
         plan = {"max_20x": "Claude Max 20x", "max_5x": "Claude Max 5x"}.get("max_20x" if "20x" in tier else "max_5x" if "5x" in tier else "", {"max": "Claude Max", "pro": "Claude Pro"}.get(sub or "", "Claude (tier unknown)"))
         monthly = 200 if "20x" in tier else 100 if "5x" in tier else 20 if sub == "pro" else 0
-        return {"id": "claude:%s" % email.lower().replace("@", "-at-").replace(".", "-"), "provider": "anthropic", "label": email, "emails": [email], "plan": plan, "monthly_usd": monthly,
-                "evidence": "%s oauthAccount (%s, %s)" % (p, oa.get("organizationType"), tier)}
+        pseudo = hashlib.sha256(email.lower().encode("utf-8")).hexdigest()[:8]
+        key = ("claude:%s" % email.lower().replace("@", "-at-").replace(".", "-")) if identifiable else ("claude:%s" % pseudo)
+        return {"id": key, "provider": "anthropic", "label": email if identifiable else "Claude account %s" % pseudo, "emails": [email] if identifiable else [], "plan": plan, "monthly_usd": monthly,
+                "evidence": "%s oauthAccount (%s, %s)" % (p, org_type, tier)}
     return None
 
 
-def draft_accounts(hosts):
+def draft_accounts(hosts, read_credentials=False, identifiable=False, warn=True):
+    """Draft accounts.json.
+
+    read_credentials=False (the default): no credential file is opened; each host gets one placeholder account per
+    tool ("codex login on <host>") with an unknown plan for the operator to fill in.
+    read_credentials=True: auth.json / .claude.json are read for the account id prefix and plan type (a warning
+    names the files first); e-mails and organisation titles are kept only with identifiable=True."""
     registry, rules = {}, []
+    if read_credentials and warn:
+        paths = []
+        for h in hosts:
+            pref = h.get("share_fallback", "") if h.get("kind") == "wsl" else ""
+            paths += [os.path.join(pref + r if pref else r, "auth.json") for r in h.get("codex_roots", [])]
+            paths += [os.path.join(os.path.dirname(pref + r if pref else r), ".claude.json") for r in h.get("claude_roots", [])]
+        credential_warning([p for p in paths if os.path.isfile(p)], identifiable)
     for h in hosts:
         pref = h.get("share_fallback", "") if h.get("kind") == "wsl" else ""
         for root in h.get("codex_roots", []):
-            a = read_codex_account(pref + root if pref else root)
+            a = read_codex_account(pref + root if pref else root, identifiable) if read_credentials else None
             if a:
                 registry.setdefault(a["id"], {k: v for k, v in a.items() if k != "id"})
                 rules.append({"when": {"tool": "codex", "host": h["name"]}, "account": a["id"], "billing": "subscription" if a["monthly_usd"] else "usage-based", "confidence": "medium",
                               "why": "current login in %s; assumed for the host's whole history" % (root + "/auth.json")})
+            elif not read_credentials:
+                key = "codex:%s" % h["name"]
+                registry.setdefault(key, {"provider": "openai", "label": "Codex login on %s" % h["name"], "plan": "unknown (set the plan and monthly_usd, or re-run init with accounts.from_credentials=y)", "monthly_usd": 0,
+                                          "evidence": "placeholder; credential files were not read"})
+                rules.append({"when": {"tool": "codex", "host": h["name"]}, "account": key, "billing": "subscription", "confidence": "low", "why": "placeholder per host; credential files were not read"})
         for root in h.get("claude_roots", []):
             home = os.path.dirname(pref + root if pref else root)
-            a = read_claude_account(home)
+            a = read_claude_account(home, identifiable) if read_credentials else None
             if a:
                 registry.setdefault(a["id"], {k: v for k, v in a.items() if k != "id"})
                 rules.append({"when": {"tool": "claude-code", "host": h["name"]}, "account": a["id"], "billing": "subscription", "confidence": "high", "why": ".claude.json oauthAccount on that host"})
+            elif not read_credentials:
+                key = "claude:%s" % h["name"]
+                registry.setdefault(key, {"provider": "anthropic", "label": "Claude Code login on %s" % h["name"], "plan": "unknown (set the plan and monthly_usd, or re-run init with accounts.from_credentials=y)", "monthly_usd": 0,
+                                          "evidence": "placeholder; credential files were not read"})
+                rules.append({"when": {"tool": "claude-code", "host": h["name"]}, "account": key, "billing": "subscription", "confidence": "low", "why": "placeholder per host; credential files were not read"})
     rules.insert(0, {"when": {"tool": "codex", "plan": "self_serve_business_usage_based"}, "account": "codex:usage-based", "billing": "usage-based", "confidence": "high",
                      "why": "the call itself is stamped usage-based; assign it to the right org in this file if you know it"})
     registry.setdefault("codex:usage-based", {"provider": "openai", "label": "Codex usage-based org", "plan": "usage-based", "monthly_usd": 0, "evidence": "rate_limits.plan_type on the calls"})
@@ -340,7 +397,9 @@ def draft_accounts(hosts):
         registry.setdefault(acct, {"provider": "mixed", "label": label, "plan": "usage-based or bundled", "monthly_usd": 0, "evidence": "tool default; edit if a subscription applies"})
         rules.append({"when": {"tool": tool}, "account": acct, "billing": "usage-based", "confidence": "medium", "why": "tool default"})
     rules.append({"when": {}, "account": "codex:usage-based", "billing": "unknown", "confidence": "low", "why": "fallback"})
-    return {"_comment": "Drafted by detect_hosts.py from credential files (identity claims only). Review labels, prices and rules; first match wins.", "accounts": registry, "rules": rules}
+    src = ("credential files (identity claims only%s)" % (", identifiable" if identifiable else ", minimised: no e-mails or organisation names")) if read_credentials else "host names only (no credential file was read)"
+    return {"_comment": "Drafted by detect_hosts.py from %s. Review labels, prices and rules; first match wins. This file names accounts: it is written owner-only and is not copied into study packages unless package_accounts is true." % src,
+            "_sensitivity": "account metadata" if read_credentials else "placeholders", "accounts": registry, "rules": rules}
 
 
 def main():
@@ -348,9 +407,11 @@ def main():
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--all-profiles", action="store_true", help="also scan other user profiles and other drives")
     ap.add_argument("--no-wsl", action="store_true")
+    ap.add_argument("--read-credentials", action="store_true", help="read auth.json / .claude.json for account id prefixes and plan types (a warning lists the files first)")
+    ap.add_argument("--identifiable", action="store_true", help="with --read-credentials: also keep e-mails and organisation titles")
     a = ap.parse_args()
     hosts, notes = detect_hosts(all_profiles=a.all_profiles, probe_wsl=not a.no_wsl)
-    accounts = draft_accounts(hosts)
+    accounts = draft_accounts(hosts, read_credentials=a.read_credentials, identifiable=a.identifiable)
     if a.json:
         print(json.dumps({"os": platform.system(), "hosts": hosts, "accounts": accounts, "notes": notes}, indent=2))
         return

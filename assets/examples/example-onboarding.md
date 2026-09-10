@@ -26,6 +26,8 @@ Working directory for scans, compiled tables and reports [~/.ai-usage-ledger/led
 Timezone for time-of-day analysis [UTC]: America/New_York
 Also scan other user profiles and other drives on this machine? (y/n) [n]: y
 Probe WSL distros on Windows? (y/n) [y]: y
+Read credential files (auth.json, .claude.json) to label accounts with their plan? Tokens are never kept. (y/n) [n]: y
+Keep e-mail addresses and organisation names in accounts.json? (n = pseudonymous account ids only) (y/n) [n]: n
 Also build an anonymised copy for publication on every run? (y/n) [n]: y
 Archive the raw log files themselves (every transcript the scanners read), so they outlive the tools' retention? (y/n) [n]: y
 Compress the archive with gzip? (y/n; n keeps files re-scannable in place) [y]: y
@@ -39,7 +41,7 @@ Detecting agent logs on this machine and its WSL distros...
   [wsl-ubuntu] Codex: //wsl$/Ubuntu/home/<you>/.codex; Claude Code: //wsl$/Ubuntu/home/<you>/.claude
   note: D:/Users/old-laptop is the same volume as an already detected profile (mapped drive or symlink); skipped
 
-Accounts found (identity claims only):
+Accounts drafted (from credential files):
   codex:example                example@example.com                ChatGPT Pro
   claude:example               example@example.com                Claude Max 20x
 Add an SSH host to scan? (user@host or blank) []: ops@build.northwind.example
@@ -57,7 +59,7 @@ The saved preferences (`~/.ai-usage-ledger/config.json`, salt omitted):
 ```json
 {
   "version": 1,
-  "initialized_at": "2026-09-09T22:14:11+00:00",
+  "initialized_at": "2026-09-10T01:50:40+00:00",
   "home": "~/.ai-usage-ledger",
   "store": {
     "kind": "sqlite",
@@ -101,6 +103,10 @@ The saved preferences (`~/.ai-usage-ledger/config.json`, salt omitted):
       "_comment": "edit roots in manifest.json"
     }
   ],
+  "accounts": {
+    "from_credentials": true,
+    "identifiable": false
+  },
   "archive": {
     "raw_logs": true,
     "compress": true,
@@ -123,7 +129,8 @@ python3 scripts/ledger.py init --yes \
   --set "brand.name=Northwind Trading Co." --set "brand.eyebrow=NORTHWIND TRADING CO." \
   --set "brand.tagline=Ship it, measure it" --set "brand.contact=northwind.example · ops@northwind.example" \
   --set brand.accent=#1E3A8A --set theme=system --set store.kind=sqlite --set timezone=America/New_York \
-  --set detect.all_profiles=y --set detect.wsl=y --set anonymize.on_every_run=y --set archive.raw_logs=y \
+  --set detect.all_profiles=y --set detect.wsl=y --set accounts.from_credentials=y --set accounts.identifiable=n \
+  --set anonymize.on_every_run=y --set archive.raw_logs=y \
   --set schedule.frequency=daily --set schedule.time=03:00 --set schedule.install=n
 python3 scripts/ledger.py run
 ```

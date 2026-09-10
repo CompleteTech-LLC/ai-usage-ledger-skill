@@ -259,6 +259,10 @@ def main():
         run(cmd)
         if accounts and os.path.isfile(accounts) and M.get("package_accounts"):  # off by default: it names people and organisations
             shutil.copy(accounts, os.path.join(pkg, "accounts.json"))
+            with open(os.path.join(pkg, "SENSITIVITY.md"), "w", encoding="utf-8") as fh:
+                fh.write("# Sensitivity\n\nThis package includes `accounts.json`, which names accounts (identifiers, plans and possibly e-mail addresses or organisation names) "
+                         "and the credential files they were read from. Treat the package as internal. Run `python3 scripts/ledger.py publish-check <this directory>` "
+                         "before sharing it, or share the anonymised package instead.\n")
         zpath = pkg + ".zip"
         with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
             for fn in sorted(os.listdir(pkg)):
