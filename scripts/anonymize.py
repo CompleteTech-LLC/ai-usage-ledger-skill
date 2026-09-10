@@ -149,7 +149,10 @@ class Anonymizer:
                 w["cwd_contains"] = None  # cannot be applied after cwd hashing; rule kept for its account/billing only
                 w.pop("cwd_contains")
             rules.append({"when": w, "account": self.account(r["account"]), "billing": r.get("billing"), "confidence": r.get("confidence"), "why": "redacted for publication"})
-        return {"_comment": "Anonymised copy; identities, e-mails, organisations and evidence removed.", "accounts": reg, "rules": rules}
+        out = {"_comment": "Anonymised copy; identities, e-mails, organisations and evidence removed.", "accounts": reg, "rules": rules}
+        if AC.get("_source"):
+            out["_source"] = AC["_source"]  # how the accounts were drafted is not identifying and the report narrative needs it
+        return out
 
     def save_map(self):
         if self.map_path:

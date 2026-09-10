@@ -26,6 +26,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -121,16 +122,21 @@ def crontab_lines():
 def material_config(home, python, frequency, time_, weekday, flags, expires, manifest=None):
     """Everything that decides what the scheduled run will do; its hash ties a consent to exactly this."""
     hosts = []
+    manifest_sha = None
     if manifest and os.path.isfile(manifest):
         try:
             with open(manifest, encoding="utf-8") as fh:
-                for h in json.load(fh).get("hosts", []):
-                    roots = {k: v for k, v in h.items() if k.endswith("_roots") or k.endswith("_dbs")}
-                    hosts.append({"name": h.get("name"), "kind": h.get("kind", "local"), "ssh": h.get("ssh"), "distro": h.get("distro"), "roots": roots})
+                M = json.load(fh)
+            # the whole manifest, normalised, is part of the consent: workdir, package_accounts, interpreters,
+            # pricing/accounts paths and every host field, not just a summary of the roots
+            manifest_sha = hashlib.sha256(json.dumps(M, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
+            for h in M.get("hosts", []):
+                roots = {k: v for k, v in h.items() if k.endswith("_roots") or k.endswith("_dbs")}
+                hosts.append({"name": h.get("name"), "kind": h.get("kind", "local"), "ssh": h.get("ssh"), "distro": h.get("distro"), "roots": roots})
         except Exception:
             pass
     return {"home": home, "python": python, "frequency": frequency, "time": time_, "weekday": weekday, "flags": sorted(flags), "expires": expires,
-            "wrapper": wrapper_body(home, python, flags, expires), "hosts": hosts}
+            "wrapper": wrapper_body(home, python, flags, expires), "hosts": hosts, "manifest_sha": manifest_sha}
 
 
 def config_hash(mat):
@@ -235,6 +241,10 @@ def install(home, python, frequency, time_, weekday="mon", flags=(), dry_run=Fal
         return remove(home, dry_run)
     mat = material_config(home, python, frequency, time_, weekday, flags, expires, manifest)
     print(disclosure(home, mat, workdir))
+    scheduler = "schtasks" if IS_WIN else "crontab"
+    if not shutil.which(scheduler):
+        print("Not installed: the scheduler command `%s` is not available on this system, so nothing was written or recorded." % scheduler)
+        return 4
     ok, why = check_consent(home, mat)
     if not ok:
         interactive = consent == "ask" and sys.stdin.isatty() and sys.stdout.isatty()

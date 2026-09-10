@@ -380,13 +380,21 @@ def do_run(args):
         raise SystemExit("No configuration at %s. Run `python3 scripts/ledger.py init` first (interactive), or `init --yes` for neutral defaults; "
                          "nothing is scanned and no branding is chosen without that step." % config_path())
     if getattr(args, "scheduled", False):
-        # a scheduled run may only do what was consented to: no host re-detection, and the manifest, flags and
-        # schedule must still hash to the consented configuration
+        # a scheduled run may only do what was consented to: no host re-detection, no one-shot options, and the
+        # complete manifest, the flags actually passed and the schedule must still hash to the consented configuration
         args.no_detect = True
+        one_shot = [n for n in ("hosts", "tools", "skip_tools", "no_scan") if getattr(args, n, None)]
+        if one_shot:
+            raise SystemExit("scheduled run refused: one-shot options are not allowed under --scheduled (%s)" % ", ".join("--" + n.replace("_", "-") for n in one_shot))
         sch = cfg.get("schedule") or {}
         flags = ["anonymize"] if cfg.get("anonymize", {}).get("on_every_run") else []
         if cfg.get("archive", {}).get("raw_logs"):
             flags.append("archive")
+        passed = [f for f, on in (("anonymize", getattr(args, "anonymize", False)), ("archive", getattr(args, "archive", False))) if on]
+        if sorted(passed) != sorted(flags):
+            raise SystemExit("scheduled run refused: the invocation's flags (%s) differ from the consented configuration (%s); the wrapper was edited. Re-run `schedule install`." % (", ".join(passed) or "none", ", ".join(flags) or "none"))
+        if (getattr(args, "until", None) or None) != (sch.get("expires") or None):
+            raise SystemExit("scheduled run refused: the invocation's expiry differs from the consented configuration; re-run `schedule install`.")
         mat = schedule.material_config(home_dir(), sys.executable, sch.get("frequency") or "daily", sch.get("time") or "03:00", sch.get("weekday") or "mon", flags, sch.get("expires"), cfg.get("manifest_path"))
         ok, why = schedule.check_consent(home_dir(), mat)
         if not ok:
@@ -690,18 +698,31 @@ def publish_check(target, accounts_path=None, extra_terms=()):
         low = path.lower()
         if low.endswith(".docx"):
             import zipfile
+            import xml.etree.ElementTree as ET
             try:
                 with zipfile.ZipFile(path) as z:
                     parts = [n for n in z.namelist() if n.startswith("word/") and n.endswith(".xml")]
-                    xml = " ".join(z.read(n).decode("utf-8", "replace") for n in parts)
-                return re.sub(r"<[^>]+>", " ", xml)
+                    lines = []
+                    for n in parts:
+                        root = ET.fromstring(z.read(n))
+                        # adjacent runs inside one paragraph are joined with nothing between them, so an identifier
+                        # split across <w:t> elements ("person@" + "corp.example") is seen whole
+                        for para in root.iter():
+                            if para.tag.endswith("}p"):
+                                lines.append("".join(t.text or "" for t in para.iter() if t.tag.endswith("}t")))
+                        if not lines:
+                            lines.append("".join(t.text or "" for t in root.iter() if t.tag.endswith("}t")))
+                return "\n".join(lines)
             except Exception:
                 return None
         if low.endswith(".pdf"):
             try:
                 import pypdf
                 reader = pypdf.PdfReader(path)
-                return " ".join((pg.extract_text() or "") for pg in reader.pages)
+                text = " ".join((pg.extract_text() or "") for pg in reader.pages)
+                if len(reader.pages) and len(text.strip()) < 20:
+                    return None  # pages without extractable text (scanned / image-only): cannot be checked
+                return text
             except ImportError:
                 return None
             except Exception:

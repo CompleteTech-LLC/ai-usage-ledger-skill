@@ -253,8 +253,23 @@ def check_persistence_consent():
     m = json.load(open(os.path.join(home, "manifest.json"), encoding="utf-8"))
     m["hosts"].append({"name": "surprise", "kind": "local", "codex_roots": ["/nowhere/.codex"]})
     json.dump(m, open(os.path.join(home, "manifest.json"), "w", encoding="utf-8"))
-    r10 = run([PY, ledger, "run", "--scheduled", "--no-scan"], env=env)
+    r10 = run([PY, ledger, "run", "--scheduled", "--archive"], env=env)  # --archive is the consented flag at this point
     pinned = r10.returncode != 0 and "scheduled run refused" in (r10.stderr + r10.stdout) and "changed since consent" in (r10.stderr + r10.stdout)
+    # an edited wrapper passing a one-shot option or an unconsented flag is refused before anything runs
+    r11 = run([PY, ledger, "run", "--scheduled", "--archive", "--no-scan"], env=env)
+    r12 = run([PY, ledger, "run", "--scheduled", "--archive", "--anonymize"], env=env)  # anonymize was never consented
+    pinned = pinned and r11.returncode != 0 and "one-shot" in (r11.stderr + r11.stdout) and r12.returncode != 0 and ("flags" in (r12.stderr + r12.stdout) or "one-shot" in (r12.stderr + r12.stdout))
+    # any manifest field counts, not only hosts: flipping package_accounts invalidates the consent
+    m2 = json.load(open(os.path.join(home, "manifest.json"), encoding="utf-8"))
+    m2["hosts"] = m2["hosts"][:-1]
+    m2["package_accounts"] = True
+    json.dump(m2, open(os.path.join(home, "manifest.json"), "w", encoding="utf-8"))
+    r13 = run([PY, ledger, "run", "--scheduled", "--archive"], env=env)
+    pinned = pinned and r13.returncode != 0 and "changed since consent" in (r13.stderr + r13.stdout)
+    # no scheduler binary: nothing is written or recorded
+    r14 = run([PY, ledger, "schedule", "install", "--dry-run"], env=dict(env, PATH=""))
+    no_scheduler = r14.returncode == 4 and "not available" in r14.stdout
+    pinned = pinned and no_scheduler
     wrapper_flag = "--scheduled" in schedule.wrapper_body(home, PY, ["anonymize"])
     # an expired scheduled run does nothing and never touches a scheduler entry it did not consent to
     os.remove(os.path.join(home, "schedule-consent.json"))
@@ -323,10 +338,21 @@ def check_credential_minimisation():
     rz = run([PY, ledger, "publish-check", os.path.join(home, "pkg.zip")], env=env)
     caught = caught and rz.returncode == 1 and "e-mail address" in rz.stdout
     # a DOCX is read through its XML parts, so an e-mail inside a document is found
-    with zipfile.ZipFile(os.path.join(home, "doc.docx"), "w") as z:
-        z.writestr("word/document.xml", '<w:document><w:p><w:r><w:t>Prepared for person@corp.example</w:t></w:r></w:p></w:document>')
+    with zipfile.ZipFile(os.path.join(home, "doc.docx"), "w") as z:  # the e-mail is split across two runs, as Word does
+        z.writestr("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Prepared for person@</w:t></w:r><w:r><w:t>corp.example</w:t></w:r></w:p></w:body></w:document>')
     rd = run([PY, ledger, "publish-check", os.path.join(home, "doc.docx")], env=env)
     caught = caught and rd.returncode == 1 and "e-mail address" in rd.stdout
+    # an image-only PDF (no extractable text) is unscannable, never approved
+    try:
+        import pypdf
+        w = pypdf.PdfWriter()
+        w.add_blank_page(width=200, height=200)
+        with open(os.path.join(home, "scan.pdf"), "wb") as fh:
+            w.write(fh)
+        rp = run([PY, ledger, "publish-check", os.path.join(home, "scan.pdf")], env=env)
+        caught = caught and rp.returncode == 1 and "unscannable" in rp.stdout
+    except ImportError:
+        pass
     # placeholders never claim a subscription
     ph = json.loads(run([PY, os.path.join(SCRIPTS, "detect_hosts.py"), "--json", "--no-wsl"], env=env).stdout)["accounts"]
     placeholder_billing = all(r.get("billing") == "unknown" for r in ph["rules"] if "placeholder" in (r.get("why") or "")) and ph.get("_source") == "host placeholders"
