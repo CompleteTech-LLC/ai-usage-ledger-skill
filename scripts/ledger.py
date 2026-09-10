@@ -42,7 +42,7 @@ import ledger_archive  # noqa: E402
 import ledger_store  # noqa: E402
 import schedule  # noqa: E402
 
-CONFIG_VERSION = 2  # 2: detect.wsl defaults off; a legacy home's implicit True is migrated to False unless detect.explicit
+CONFIG_VERSION = 3  # 2: detect.wsl defaults off (implicit True withdrawn unless detect.explicit); 3: manifest/consent reconciled with detect.wsl
 
 
 def home_dir():
@@ -61,23 +61,29 @@ def load_config():
     safety.refuse_if_shared(p, "ledger config")
     with open(p, encoding="utf-8") as fh:
         cfg = migrate_config(json.load(fh))
-    if cfg.pop("_wsl_withdrawn", False):
-        # the manifest and any scheduled consent were built under the old default: drop the WSL hosts now and
-        # invalidate the consent so a scheduled run refuses until the operator reviews the new scope
+    if cfg.pop("_reconcile_wsl", False):
+        # whatever version wrote this home: when WSL discovery is off, the manifest must hold no WSL host. Prune
+        # them; only when that actually changes the scanned scope is a scheduled consent set aside.
+        changed = False
         mp = cfg.get("manifest_path")
         try:
-            if mp and os.path.isfile(mp):
+            if not (cfg.get("detect") or {}).get("wsl") and mp:
+                if not os.path.isfile(mp):  # a configured manifest that is absent right now may reappear: not reconciled yet
+                    raise FileNotFoundError(mp)
                 with open(mp, encoding="utf-8") as fh:
                     m = json.load(fh)
                 kept = [h for h in m.get("hosts", []) if h.get("kind") != "wsl"]
                 if len(kept) != len(m.get("hosts", [])):
                     m["hosts"] = kept
                     write_json_private(mp, m)
-                    sys.stderr.write("config migrated: WSL hosts removed from %s\n" % mp)
+                    changed = True
+                    sys.stderr.write("config migrated: WSL hosts removed from %s because WSL discovery is off\n" % mp)
         except Exception as ex:
-            sys.stderr.write("config migrated: could not prune WSL hosts from the manifest (%s); run `init` to regenerate it\n" % ex)
+            # the manifest was not inspected: keep the home below version 3 so the next load tries again
+            cfg["version"] = min(int(cfg.get("version") or 1), 2)
+            sys.stderr.write("config migrated: could not prune WSL hosts from the manifest (%s); the reconciliation will be retried on the next load, or run `init` to regenerate it\n" % ex)
         consent = os.path.join(home_dir(), schedule.CONSENT_FILE)
-        if os.path.isfile(consent):
+        if changed and os.path.isfile(consent):
             os.replace(consent, consent + ".withdrawn")
             sys.stderr.write("config migrated: the scheduled-run consent was set aside because the scanned scope changed; scheduled runs will refuse until `schedule install` is confirmed again\n")
         save_config(cfg)
@@ -268,8 +274,10 @@ def migrate_config(cfg):
         d = cfg["detect"]
         if d.get("wsl") and not d.get("explicit"):  # never chosen by the operator: the pre-1.5.8 default is withdrawn
             d["wsl"] = False
-            cfg["_wsl_withdrawn"] = True
             sys.stderr.write("config migrated: WSL discovery is now off by default; re-enable it with `init --set detect.wsl=y` if you want it.\n")
+    if int(cfg.get("version") or 1) < 3:
+        cfg["_reconcile_wsl"] = True  # a home saved by 1.5.9 may already be version 2 with WSL hosts still in its manifest
+    if int(cfg.get("version") or 1) < CONFIG_VERSION:
         cfg["version"] = CONFIG_VERSION
     cfg.setdefault("branding", dict(DEFAULT_BRAND))
     cfg.setdefault("extra_hosts", [])

@@ -86,7 +86,8 @@ def attach_accounts(db, accounts_path):
 def open_db(kind, path):
     """SQLite store: open directly (read-only). JSON/CSV: load into memory."""
     if kind == "sqlite":
-        return sqlite3.connect("file:%s?mode=ro" % path.replace("\\", "/"), uri=True)
+        from urllib.parse import quote
+        return sqlite3.connect("file:%s?mode=ro" % quote(path.replace("\\", "/"), safe="/:"), uri=True)
     st = ledger_store.Store.open(kind, path)
     db = sqlite3.connect(":memory:")
     db.execute("CREATE TABLE events (%s, extra TEXT)" % ", ".join(ledger_store.EVENT_COLUMNS))

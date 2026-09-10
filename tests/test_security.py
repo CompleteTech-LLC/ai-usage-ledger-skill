@@ -576,10 +576,10 @@ def check_followups_1_5_9():
     json.dump(c, open(cfgp, "w", encoding="utf-8"))
     s1 = run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
     c1 = json.load(open(cfgp, encoding="utf-8"))  # the withdrawal is persisted as soon as the config is loaded
-    migrated = "migrated" in s1.stderr and c1["detect"]["wsl"] is False and c1.get("version") == 2  # persisted on load
+    migrated = "migrated" in s1.stderr and c1["detect"]["wsl"] is False and c1.get("version") == 3  # persisted on load
     r2 = run([PY, os.path.join(SCRIPTS, "ledger.py"), "init", "--yes"], env=env)
     c2 = json.load(open(cfgp, encoding="utf-8"))
-    withdrawn = r2.returncode == 0 and c2["detect"]["wsl"] is False and c2.get("version") == 2
+    withdrawn = r2.returncode == 0 and c2["detect"]["wsl"] is False and c2.get("version") == 3
     c2["version"] = 1
     c2["detect"] = {"all_profiles": False, "wsl": True, "on_every_run": True, "explicit": True}
     json.dump(c2, open(cfgp, "w", encoding="utf-8"))
@@ -617,14 +617,75 @@ def check_followups_1_5_9():
     json.dump(c4, open(cfgp, "w", encoding="utf-8"))
     s4 = run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
     m4 = json.load(open(os.path.join(home, "manifest.json"), encoding="utf-8"))
-    pruned = s4.returncode == 0 and not any(h.get("kind") == "wsl" for h in m4["hosts"]) and not os.path.exists(os.path.join(home, "schedule-consent.json")) and os.path.exists(os.path.join(home, "schedule-consent.json.withdrawn")) and json.load(open(cfgp, encoding="utf-8")).get("version") == 2
+    pruned = s4.returncode == 0 and not any(h.get("kind") == "wsl" for h in m4["hosts"]) and not os.path.exists(os.path.join(home, "schedule-consent.json")) and os.path.exists(os.path.join(home, "schedule-consent.json.withdrawn")) and json.load(open(cfgp, encoding="utf-8")).get("version") == 3
+    # a home already saved at version 2 (by 1.5.9) with WSL off but WSL hosts still in its manifest is reconciled
+    m5 = json.load(open(os.path.join(home, "manifest.json"), encoding="utf-8"))
+    m5["hosts"].append({"name": "wsl-ubuntu", "kind": "wsl", "distro": "Ubuntu", "codex_roots": ["/home/u/.codex"]})
+    json.dump(m5, open(os.path.join(home, "manifest.json"), "w", encoding="utf-8"))
+    open(os.path.join(home, "schedule-consent.json"), "w").write("{}")
+    c5 = json.load(open(cfgp, encoding="utf-8"))
+    c5["version"] = 2
+    c5["detect"] = {"all_profiles": False, "wsl": False, "on_every_run": True}
+    json.dump(c5, open(cfgp, "w", encoding="utf-8"))
+    run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
+    m5b = json.load(open(os.path.join(home, "manifest.json"), encoding="utf-8"))
+    reconciled = not any(h.get("kind") == "wsl" for h in m5b["hosts"]) and os.path.exists(os.path.join(home, "schedule-consent.json.withdrawn")) and json.load(open(cfgp, encoding="utf-8")).get("version") == 3
+    # when the manifest holds no WSL host, a migration leaves the consent alone
+    for f in os.listdir(home):
+        if f.startswith("schedule-consent.json"):
+            os.remove(os.path.join(home, f))
+    open(os.path.join(home, "schedule-consent.json"), "w").write("{}")
+    c6 = json.load(open(cfgp, encoding="utf-8"))
+    c6["version"] = 1
+    c6["detect"] = {"all_profiles": False, "wsl": True, "on_every_run": True}
+    json.dump(c6, open(cfgp, "w", encoding="utf-8"))
+    run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
+    consent_kept = os.path.exists(os.path.join(home, "schedule-consent.json")) and not os.path.exists(os.path.join(home, "schedule-consent.json.withdrawn"))
+    # an index with our table names but an incomplete schema is not accepted as a legacy archive
+    partial = os.path.join(base, "partial")
+    os.makedirs(partial)
+    dbp = _sq.connect(os.path.join(partial, "index.sqlite"))
+    dbp.execute("CREATE TABLE files (host, path, rel, size, mtime, sha256, archived_at)")
+    dbp.execute("CREATE TABLE runs (x)")
+    dbp.commit()
+    dbp.close()
+    partial_refused = not ledger_archive.Archive._is_legacy_archive(partial)
+    # a `runs` view exposing our columns is not our index either
+    viewd = os.path.join(base, "viewd")
+    os.makedirs(viewd)
+    dbv = _sq.connect(os.path.join(viewd, "index.sqlite"))
+    dbv.execute("CREATE TABLE files (host TEXT, path TEXT, rel TEXT, size INTEGER, mtime REAL, sha256 TEXT, archived_at TEXT, versions INTEGER DEFAULT 1, PRIMARY KEY (host, path))")
+    dbv.execute("CREATE TABLE runs_ (id INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT, started_at TEXT, finished_at TEXT, files_new INTEGER, files_updated INTEGER, bytes INTEGER, note TEXT)")
+    dbv.execute("CREATE VIEW runs AS SELECT * FROM runs_")
+    dbv.commit()
+    dbv.close()
+    view_refused = not ledger_archive.Archive._is_legacy_archive(viewd)
+    # a reconciliation that could not inspect the manifest is retried on the next load
+    mpath = os.path.join(home, "manifest.json")
+    good_manifest = open(mpath, encoding="utf-8").read()
+    mj = json.loads(good_manifest)
+    mj["hosts"].append({"name": "wsl-ubuntu", "kind": "wsl", "distro": "Ubuntu", "codex_roots": ["/home/u/.codex"]})
+    open(mpath, "w", encoding="utf-8").write("{not json" + json.dumps(mj))
+    c7 = json.load(open(cfgp, encoding="utf-8"))
+    c7["version"] = 2
+    c7["detect"] = {"all_profiles": False, "wsl": False, "on_every_run": True}
+    json.dump(c7, open(cfgp, "w", encoding="utf-8"))
+    run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
+    retry_pending = json.load(open(cfgp, encoding="utf-8")).get("version") == 2
+    os.remove(mpath)  # an absent configured manifest is not reconciled either
+    run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
+    retry_pending = retry_pending and json.load(open(cfgp, encoding="utf-8")).get("version") == 2
+    json.dump(mj, open(mpath, "w", encoding="utf-8"))  # repaired: the next load prunes the WSL host
+    run([PY, os.path.join(SCRIPTS, "ledger.py"), "status"], env=env)
+    m7 = json.load(open(mpath, encoding="utf-8"))
+    retried = retry_pending and json.load(open(cfgp, encoding="utf-8")).get("version") == 3 and not any(h.get("kind") == "wsl" for h in m7["hosts"])
     # an invalid archive path stops onboarding before accounts.json is rewritten
     acc_before = open(os.path.join(home, "accounts.json"), encoding="utf-8").read()
     r5 = run([PY, os.path.join(SCRIPTS, "ledger.py"), "init", "--yes", "--set", "archive.raw_logs=y", "--set", "archive.path=" + foreign, "--set", "accounts.from_credentials=y"], env=env)
     early = r5.returncode != 0 and "already holds other files" in (r5.stderr + r5.stdout) and open(os.path.join(home, "accounts.json"), encoding="utf-8").read() == acc_before
-    good = hidden and gone and status_ok and refused and marker and migrated and withdrawn and kept and foreign_refused and legacy_ok and contained_ok and pruned and early
-    print("followups: legacy row hidden %s / purged in other mode %s, status post-purge %s, unrelated dir refused %s / marker %s, legacy wsl withdrawn %s (explicit kept %s), foreign index refused %s / legacy accepted %s, escape row kept %s, manifest pruned + consent withdrawn %s, archive path checked first %s  %s" % (
-        hidden, gone, status_ok, refused, marker, withdrawn, kept, foreign_refused, legacy_ok, contained_ok, pruned, early, "OK" if good else "FAIL"))
+    good = hidden and gone and status_ok and refused and marker and migrated and withdrawn and kept and foreign_refused and legacy_ok and contained_ok and pruned and early and reconciled and consent_kept and partial_refused and view_refused and retried
+    print("followups: legacy row hidden %s / purged in other mode %s, status post-purge %s, unrelated dir refused %s / marker %s, legacy wsl withdrawn %s (explicit kept %s), foreign index refused %s / legacy accepted %s, escape row kept %s, manifest pruned + consent withdrawn %s, archive path checked first %s, v2 home reconciled %s, consent kept without WSL hosts %s, partial schema refused %s, view refused %s, failed reconcile retried %s  %s" % (
+        hidden, gone, status_ok, refused, marker, withdrawn, kept, foreign_refused, legacy_ok, contained_ok, pruned, early, reconciled, consent_kept, partial_refused, view_refused, retried, "OK" if good else "FAIL"))
     if not good:
         print(r.stdout[-300:], r.stderr[-300:], s1.stderr[-200:], r2.stderr[-200:])
     shutil.rmtree(base, ignore_errors=True)
