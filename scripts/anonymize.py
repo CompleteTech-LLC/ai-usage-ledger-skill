@@ -150,8 +150,9 @@ class Anonymizer:
                 w.pop("cwd_contains")
             rules.append({"when": w, "account": self.account(r["account"]), "billing": r.get("billing"), "confidence": r.get("confidence"), "why": "redacted for publication"})
         out = {"_comment": "Anonymised copy; identities, e-mails, organisations and evidence removed.", "accounts": reg, "rules": rules}
-        if AC.get("_source"):
-            out["_source"] = AC["_source"]  # how the accounts were drafted is not identifying and the report narrative needs it
+        src = AC.get("_source") or {"placeholders": "host placeholders", "account metadata": "credential files"}.get(AC.get("_sensitivity"))
+        if src:
+            out["_source"] = src  # how the accounts were drafted is not identifying and the report narrative needs it
         return out
 
     def save_map(self):

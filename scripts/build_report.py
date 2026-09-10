@@ -525,10 +525,11 @@ def main():
     D.h(3, "2.4 Accounts and subscription attribution")
     _src = (S.get("accounts") or {}).get("source") or "credential files"
     _how = {"host placeholders": "Accounts are placeholders named after each host: credential files were not read, so plans and billing are unknown until `accounts.json` is filled in.",
-            "credential files, minimised": "Accounts were identified from the credential files on each host with identity minimised: pseudonymous account ids and plan types only, no e-mail addresses or organisation names."}.get(_src, "Accounts were identified from the credential files on each host.")
+            "credential files, minimised": "Accounts were identified from the credential files on each host with identity minimised: pseudonymous account ids and plan types only, no e-mail addresses or organisation names.",
+            "unspecified": "The accounts file does not record how it was drafted; treat its labels as operator-supplied."}.get(_src, "Accounts were identified from the credential files on each host.")
     D.p(_how + " Codex rollouts record the billing plan on every call (`rate_limits.plan_type`) but not the account, so calls are attributed to accounts by ordered rules in `accounts.json`; each rule carries its evidence and a confidence level. A subscription month is counted only when the account recorded at least one call in that month.")
     if AREG:
-        D.table(["Account", "Identity", "Plan", "Price", "Evidence"], [["`%s`" % k, v.get("label", ""), v.get("plan", ""), "$%d/mo" % v.get("monthly_usd", 0) if v.get("monthly_usd") else "usage-based / n.a.", v.get("evidence", "")] for k, v in AREG.items()], ["l"] * 5)
+        D.table(["Account", "Identity", "Plan", "Price", "Evidence"], [["`%s`" % k, v.get("label", ""), v.get("plan", ""), "$%d/mo" % v.get("monthly_usd", 0) if v.get("monthly_usd") else ("unknown" if (ATOT.get(k) or {}).get("billing") == "unknown" else "usage-based / n.a."), v.get("evidence", "")] for k, v in AREG.items()], ["l"] * 5)
         D.table(["Rule (first match wins)", "Account", "Billing", "Confidence", "Why"], [["`%s`" % ", ".join("%s=%s" % kv for kv in r.get("when", {}).items()), "`%s`" % r["account"], r.get("billing", ""), r.get("confidence", ""), r.get("why", "")] for r in ARULES], ["l"] * 5)
     D.h(3, "2.5 Validation against tool-maintained counters")
     if val:
@@ -618,7 +619,7 @@ def main():
     D.table(["Tool", "Calls", "Sessions", "Uncached in", "Cache read", "Cache write", "Output", "Total", "Hit rate", "API-eq.", "Cache saved"], rows, ["l"] + ["r"] * 10)
     if ATOT:
         D.h(3, "4.1b By account")
-        rows = [["`%s`" % k, t["label"], t["plan"], fmt(t["months"]), money(t["subscription_usd"]), money(t["api_equivalent_usd"]), money(t["api_if_uncached_usd"]), ("%s×" % t["api_to_sub_ratio"]) if t.get("api_to_sub_ratio") is not None else "usage-based", fmt(t["calls"]), compact(t["total"])] for k, t in sorted(ATOT.items(), key=lambda kv: -kv[1]["api_equivalent_usd"])]
+        rows = [["`%s`" % k, t["label"], t["plan"], fmt(t["months"]), money(t["subscription_usd"]), money(t["api_equivalent_usd"]), money(t["api_if_uncached_usd"]), ("%s×" % t["api_to_sub_ratio"]) if t.get("api_to_sub_ratio") is not None else ("unknown" if t.get("billing") == "unknown" else "usage-based"), fmt(t["calls"]), compact(t["total"])] for k, t in sorted(ATOT.items(), key=lambda kv: -kv[1]["api_equivalent_usd"])]
         D.table(["Account", "Identity", "Plan", "Months", "Paid", "API-eq.", "If uncached", "API / sub", "Calls", "Tokens"], rows, ["l", "l", "l"] + ["r"] * 7)
         months_a = sorted({r["month"] for r in AROWS})
         sub_keys = [k for k, _ in sorted(sub_accounts.items(), key=lambda kv: -kv[1]["api_equivalent_usd"])]

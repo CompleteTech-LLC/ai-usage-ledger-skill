@@ -357,6 +357,14 @@ def check_credential_minimisation():
     ph = json.loads(run([PY, os.path.join(SCRIPTS, "detect_hosts.py"), "--json", "--no-wsl"], env=env).stdout)["accounts"]
     placeholder_billing = all(r.get("billing") == "unknown" for r in ph["rules"] if "placeholder" in (r.get("why") or "")) and ph.get("_source") == "host placeholders"
     caught = caught and placeholder_billing
+    # a 1.5.6-style accounts file (has _sensitivity, no _source) is described from its sensitivity, never as credential-derived
+    import compile_ai_logs
+    inferred = (compile_ai_logs.account_source({"_sensitivity": "placeholders", "accounts": {}}) == "host placeholders"
+                and compile_ai_logs.account_source({"_sensitivity": "account metadata", "accounts": {}}) == "credential files"
+                and compile_ai_logs.account_source({"accounts": {"x": {"label": "x"}}}) == "unspecified")
+    import anonymize
+    an_src = anonymize.Anonymizer("s").accounts({"_sensitivity": "placeholders", "accounts": {}, "rules": []}).get("_source") == "host placeholders"
+    caught = caught and inferred and an_src
     clean_dir = os.path.join(home, "clean")
     os.makedirs(clean_dir, exist_ok=True)
     open(os.path.join(clean_dir, "USAGE_REPORT.md"), "w", encoding="utf-8").write("host-1a2b3c: 1,510 calls, example@example.com placeholder only. Claude Code keeps its login in `.claude.json`; auth.json is never copied.\n")
