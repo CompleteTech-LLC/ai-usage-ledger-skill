@@ -549,6 +549,136 @@ def check_examples_self_contained():
     return good
 
 
+def check_study_url(compiled):
+    """#11: the 'Read the study' link renders only for an absolute https URL. javascript:, data:, protocol-relative,
+    http: and whitespace-wrapped values (from STUDY_URL or the report config) are dropped with a warning and never
+    reach the page; a valid https value is embedded and the anchor is built with DOM APIs (rel=noopener noreferrer)."""
+    summary = os.path.join(compiled, "summary.json")
+    dashboard = os.path.join(SCRIPTS, "build_dashboard.py")
+    hostile = ["javascript:alert(1)", "JavaScript:alert(1)", "data:text/html,<script>alert(1)</script>", "vbscript:msgbox(1)", "//evil.example/study", "http://evil.example/study", " https://evil.example/x", "https://"]
+    pred_ok = all(_raises(lambda v=v: safety.validate_study_url(v)) for v in hostile) and safety.validate_study_url("https://example.org/study") == "https://example.org/study" and safety.validate_study_url("") == ""
+    results = [("predicate", pred_ok, "")]
+
+    def page_clean(h):
+        return h and 'href="javascript' not in h and "javascript:" not in h and "vbscript:" not in h and "evil.example" not in h and '"study_url": ""' in h and "data:text/html" not in h
+    for i, val in enumerate(hostile):
+        dash = os.path.join(OUT, "study-env-%d.html" % i)
+        env = dict(os.environ)
+        env["STUDY_URL"] = val
+        r = run([PY, dashboard, summary, dash], env=env)
+        h = open(dash, encoding="utf-8").read() if os.path.isfile(dash) else ""
+        good = r.returncode == 0 and bool(page_clean(h)) and "study_url" in r.stderr.lower() and "dropped" in r.stderr
+        results.append(("env %s" % val.split(":")[0].strip()[:10], good, "rc=%s warned=%s" % (r.returncode, "dropped" in r.stderr)))
+    cfg_bad = os.path.join(OUT, "study-config-bad.json")
+    json.dump({"study_url": "javascript:alert(1)"}, open(cfg_bad, "w", encoding="utf-8"))
+    dash = os.path.join(OUT, "study-config-bad.html")
+    env = dict(os.environ)
+    env.pop("STUDY_URL", None)
+    r = run([PY, dashboard, summary, dash, cfg_bad], env=env)
+    h = open(dash, encoding="utf-8").read() if os.path.isfile(dash) else ""
+    results.append(("config javascript", r.returncode == 0 and bool(page_clean(h)) and "dropped" in r.stderr, "rc=%s" % r.returncode))
+    # a valid https link: embedded as data, rendered by DOM APIs (no href="https://..." in the static markup), warning-free
+    for label, envval, cfgval in (("env https", "https://example.org/study", None), ("config https", None, "https://example.org/study")):
+        dash = os.path.join(OUT, "study-good-%s.html" % label.split()[0])
+        env = dict(os.environ)
+        env.pop("STUDY_URL", None)
+        cmd = [PY, dashboard, summary, dash]
+        if envval:
+            env["STUDY_URL"] = envval
+        if cfgval:
+            cfg_good = os.path.join(OUT, "study-config-good.json")
+            json.dump({"study_url": cfgval}, open(cfg_good, "w", encoding="utf-8"))
+            cmd.append(cfg_good)
+        r = run(cmd, env=env)
+        h = open(dash, encoding="utf-8").read() if os.path.isfile(dash) else ""
+        good = r.returncode == 0 and '"study_url": "https://example.org/study"' in h and 'rel = "noopener noreferrer"' in h and "createElement(\"a\")" in h and "dropped" not in r.stderr and not EXTERNAL_REF.search(h)
+        results.append((label, good, "rc=%s" % r.returncode))
+    good = all(g for _, g, _ in results)
+    print("study_url: " + "; ".join("%s %s%s" % (lb, "ok" if g else "FAIL", "" if g else " (%s)" % d) for lb, g, d in results) + "  %s" % ("OK" if good else "FAIL"))
+    if not good:
+        print(r.stderr[-400:])
+    return good
+
+
+def check_package_sensitivity(compiled):
+    """#16: every package carries SENSITIVITY.md, listed in README.md and Appendix B and bound by SHA256SUMS; by default
+    ledger.json has no absolute scan root and no config block, and the study shows only the tail of each root.
+    --package-paths (manifest package_paths: true) restores both. Returns the default package path for later checks."""
+    scans = os.path.join(ROOT, "tests", "out", "pipeline", "scans")
+    roots = []
+    for host in os.listdir(scans) if os.path.isdir(scans) else []:
+        for fn in os.listdir(os.path.join(scans, host)):
+            if fn.startswith("inventory.") and fn.endswith(".json"):
+                roots += [r["root"] for r in json.load(open(os.path.join(scans, host, fn), encoding="utf-8")).get("roots", []) if r.get("root")]
+    roots = [r for r in roots if os.path.isabs(r)]
+    cfgp = os.path.join(ROOT, "examples", "report_config.completetech.json")
+
+    def build(name, extra):
+        pkg = os.path.join(OUT, name)
+        r = run([PY, os.path.join(SCRIPTS, "build_report.py"), "--compiled", compiled, "--scans", scans, "--pricing", os.path.join(ROOT, "templates", "pricing.json"), "--out", pkg, "--date", "2026-09-09", "--tz", "UTC", "--config", cfgp] + extra)
+        return pkg, r
+
+    def leaks(text):
+        return [r for r in roots if r in text or json.dumps(r)[1:-1] in text]
+    results = []
+    pkg, r = build("pkg-default", [])
+    sens = os.path.join(pkg, "SENSITIVITY.md")
+    sums = open(os.path.join(pkg, "SHA256SUMS"), encoding="utf-8").read() if os.path.isfile(os.path.join(pkg, "SHA256SUMS")) else ""
+    readme = open(os.path.join(pkg, "README.md"), encoding="utf-8").read() if os.path.isfile(os.path.join(pkg, "README.md")) else ""
+    report = open(os.path.join(pkg, "USAGE_REPORT.md"), encoding="utf-8").read() if os.path.isfile(os.path.join(pkg, "USAGE_REPORT.md")) else ""
+    sens_text = open(sens, encoding="utf-8").read() if os.path.isfile(sens) else ""
+    results.append(("sensitivity file", r.returncode == 0 and "publish-check" in sens_text and "host names" in sens_text.lower() and "omitted" in sens_text, ""))
+    results.append(("listed", re.search(r"\bSENSITIVITY\.md\s*$", sums, re.M) is not None and "SENSITIVITY.md" in readme and "`SENSITIVITY.md`" in report, "sums=%s readme=%s report=%s" % ("SENSITIVITY.md" in sums, "SENSITIVITY.md" in readme, "SENSITIVITY.md" in report)))
+    ltxt = open(os.path.join(pkg, "ledger.json"), encoding="utf-8").read() if os.path.isfile(os.path.join(pkg, "ledger.json")) else "{}"
+    L = json.loads(ltxt)
+    inv_roots = [x for i in L.get("scan_inventory", []) for x in i.get("roots", [])]
+    results.append(("ledger.json redacted", bool(roots) and "config" not in L and inv_roots and all("root" not in x and x.get("tool") and x.get("root_tail") for x in inv_roots) and not leaks(ltxt) and not leaks(report),
+                    "roots=%d config=%s leaks=%s" % (len(roots), "config" in L, (leaks(ltxt) + leaks(report))[:2])))
+    pkg_paths, r2 = build("pkg-paths", ["--package-paths"])
+    ltxt2 = open(os.path.join(pkg_paths, "ledger.json"), encoding="utf-8").read() if os.path.isfile(os.path.join(pkg_paths, "ledger.json")) else "{}"
+    L2 = json.loads(ltxt2)
+    sens2 = open(os.path.join(pkg_paths, "SENSITIVITY.md"), encoding="utf-8").read() if os.path.isfile(os.path.join(pkg_paths, "SENSITIVITY.md")) else ""
+    results.append(("--package-paths keeps them", r2.returncode == 0 and "config" in L2 and len(leaks(ltxt2)) == len(roots) and "ARE included" in sens2, "rc=%s" % r2.returncode))
+    # end to end: the pipeline's build step writes the notice into the real package and binds it
+    r3 = run([PY, os.path.join(SCRIPTS, "run_pipeline.py"), "--manifest", os.path.join(ROOT, "examples", "manifest.fixtures.json"), "--only", "build"])
+    ppkg = os.path.join(ROOT, "tests", "out", "pipeline", "reports", "Example_Ledger_2026-09-09")
+    psums = open(os.path.join(ppkg, "SHA256SUMS"), encoding="utf-8").read() if os.path.isfile(os.path.join(ppkg, "SHA256SUMS")) else ""
+    pledger = open(os.path.join(ppkg, "ledger.json"), encoding="utf-8").read() if os.path.isfile(os.path.join(ppkg, "ledger.json")) else "{}"
+    results.append(("pipeline package", r3.returncode == 0 and os.path.isfile(os.path.join(ppkg, "SENSITIVITY.md")) and re.search(r"\bSENSITIVITY\.md\s*$", psums, re.M) is not None and not leaks(pledger) and '"config"' not in pledger, "rc=%s" % r3.returncode))
+    good = all(g for _, g, _ in results)
+    print("package:   " + "; ".join("%s %s%s" % (lb, "ok" if g else "FAIL", "" if g else " (%s)" % d) for lb, g, d in results) + "  %s" % ("OK" if good else "FAIL"))
+    if not good:
+        print(r.stderr[-400:], r2.stderr[-400:], r3.stderr[-400:])
+    return good, pkg
+
+
+def check_unattributed(compiled, pkg):
+    """#18: no shipped or drafted accounts file carries a catch-all rule; the fixture calls that match no rule appear as
+    their own `unattributed` row (billing unknown) in summary.json, the dashboard and the study, with the count stated."""
+    import detect_hosts
+    files = {"templates/accounts.example.json": os.path.join(ROOT, "templates", "accounts.example.json"), "examples/accounts.fixtures.json": os.path.join(ROOT, "examples", "accounts.fixtures.json")}
+    catchall = [n for n, p in files.items() if any(not r.get("when") for r in json.load(open(p, encoding="utf-8")).get("rules", []))]
+    draft = detect_hosts.draft_accounts([{"name": "h1", "kind": "local", "codex_roots": ["/home/u/.codex"], "claude_roots": ["/home/u/.claude/projects"]}], read_credentials=False, warn=False)
+    if any(not r.get("when") for r in draft.get("rules", [])):
+        catchall.append("detect_hosts.draft_accounts")
+    S = json.load(open(os.path.join(compiled, "summary.json"), encoding="utf-8"))
+    acc = S.get("accounts") or {}
+    row = next((r for r in acc.get("by_account", []) if r.get("account") == "unattributed"), None)
+    tot = (acc.get("subscription_totals") or {}).get("unattributed") or {}
+    summary_ok = all(r.get("when") for r in acc.get("rules", [])) and row is not None and row["calls"] > 0 and tot.get("billing") == "unknown" and not tot.get("subscription_usd")
+    dash = os.path.join(OUT, "unattributed-dashboard.html")
+    r = run([PY, os.path.join(SCRIPTS, "build_dashboard.py"), os.path.join(compiled, "summary.json"), dash])
+    h = open(dash, encoding="utf-8").read() if os.path.isfile(dash) else ""
+    dash_ok = r.returncode == 0 and "matched no rule" in h and '"account": "unattributed"' in h
+    report = open(os.path.join(pkg, "USAGE_REPORT.md"), encoding="utf-8").read() if os.path.isfile(os.path.join(pkg, "USAGE_REPORT.md")) else ""
+    n = "{:,}".format(row["calls"]) if row else "?"
+    study_ok = "**Unattributed calls.** %s calls" % n in report and "matched no rule" in report and "| `unattributed` |" in report
+    good = not catchall and summary_ok and dash_ok and study_ok
+    print("unattributed: no catch-all rules %s; summary row %s; dashboard note %s; study count %s  %s" % (
+        "ok" if not catchall else "FAIL (%s)" % ", ".join(catchall), "ok" if summary_ok else "FAIL", "ok" if dash_ok else "FAIL", "ok" if study_ok else "FAIL", "OK" if good else "FAIL"))
+    return good
+
+
 def main():
     shutil.rmtree(OUT, ignore_errors=True)
     os.makedirs(OUT, exist_ok=True)
@@ -570,6 +700,10 @@ def main():
     ok = check_shared_predicates() and ok
     ok = check_archive_boundaries() and ok
     ok = check_private_permissions() and ok
+    ok = check_study_url(compiled) and ok
+    pkg_ok, default_pkg = check_package_sensitivity(compiled)
+    ok = pkg_ok and ok
+    ok = check_unattributed(compiled, default_pkg) and ok
     print("SECURITY OK" if ok else "SECURITY CHECKS FAILED")
     return 0 if ok else 1
 

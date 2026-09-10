@@ -315,6 +315,68 @@ def price_usage(usage, pricing, model):
             + usage.get("cacheCreationInputTokens", 0) * row["cache_write_5m"] + usage.get("outputTokens", 0) * row["output"]) / 1e6
 
 
+def root_tail(root):
+    """Last path component of a scan root (`codex`, `projects`, `opencode.db`): enough to recognise the tool, never the user name or drive."""
+    parts = [x for x in str(root or "").replace("\\", "/").split("/") if x]
+    return parts[-1] if parts else ""
+
+
+def redact_inventory(inv):
+    """scan_inventory for ledger.json without absolute paths: tool, host and counts stay, the `root` key is replaced by its tail."""
+    out = []
+    for i in inv:
+        j = dict(i)
+        j["roots"] = [dict({k: v for k, v in r.items() if k != "root"}, root_tail=root_tail(r.get("root"))) for r in i.get("roots", [])]
+        out.append(j)
+    return out
+
+
+def short_path(v):
+    """A path-valued cell reduced to its last component (`repo`), keeping a tool prefix such as `openclaw:` in front of a
+    path (`openclaw:pi`); values without a path separator pass through unchanged."""
+    if not isinstance(v, str) or not ("/" in v or "\\" in v):
+        return v
+    head, sep, rest = v.partition(":")
+    if sep and rest and len(head) > 1 and head.replace("-", "").replace("_", "").isalnum() and (rest[:1] in "/\\~" or (len(rest) > 2 and rest[1] == ":" and rest[2] in "/\\")):
+        return head + ":" + tail(rest)
+    return tail(v)
+
+
+def redact_rows(rows, key):
+    """Rows for ledger.json with a path-valued column (working directory, path-shaped entry point) reduced to its last
+    component, the same tail the report tables show; other values pass through."""
+    return [dict(r, **{key: short_path(r.get(key))}) if isinstance(r.get(key), str) else r for r in rows or []]
+
+
+SENSITIVITY_MD = """# Sensitivity
+
+This package was compiled from local agent logs and describes the machines and people behind them. Before it leaves the
+machine it was built on, know what it contains:
+
+- **Host names** in `ledger.json` (`scope.hosts`, `by_tool_host`, `coverage`, `scan_inventory`) and in the inventory,
+  coverage and validation tables of `USAGE_REPORT.md` / `report.html`.
+- **Project directory names**: the by-project and top-session tables (report and `ledger.json`) carry the last
+  component of each working directory, and the top-session tables carry session ids.
+- **Account labels and plan names** from `accounts.json` in the account tables and in `ledger.json` (`accounts`): these
+  can be e-mail addresses or organisation names when the accounts file was drafted with identifiable credentials.
+- **File-system paths**: %(paths)s
+
+`accounts.json` itself is copied into the package only when the manifest sets `package_accounts: true`.
+
+Treat the package as internal. Run `python3 scripts/ledger.py publish-check <this directory>` before sharing it, or
+share the anonymised copy (`ledger.py run --anonymize`, which pseudonymises hosts, projects and accounts) instead.
+"""
+
+
+def write_sensitivity(out_dir, package_paths):
+    """Every package gets SENSITIVITY.md; run_pipeline appends a paragraph when it adds accounts.json."""
+    paths = ("absolute scan roots, full working directories and the report configuration ARE included in `ledger.json` because the manifest sets `package_paths: true`; they name user profiles and drives."
+             if package_paths else
+             "absolute scan roots, full working directories and the report configuration are omitted from `ledger.json` (only the last path component of each root and directory is kept); set `package_paths: true` in the manifest to include them.")
+    with open(os.path.join(out_dir, "SENSITIVITY.md"), "w", encoding="utf-8") as fh:
+        fh.write(SENSITIVITY_MD % {"paths": paths})
+
+
 def write_sums(out_dir):
     """SHA256SUMS over every regular file in the package except itself; run_pipeline calls it again after adding optional files."""
     names = sorted(n for n in os.listdir(out_dir) if n != "SHA256SUMS" and os.path.isfile(os.path.join(out_dir, n)))
@@ -333,9 +395,16 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--date", default=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     ap.add_argument("--tz", default="UTC")
+    ap.add_argument("--package-paths", action="store_true", help="keep absolute scan roots and the report config in ledger.json (off by default: they name users and directories)")
     a = ap.parse_args()
 
-    CFG = load_json(a.config) if a.config and os.path.isfile(a.config) else {}
+    CFG = {}
+    if a.config and os.path.isfile(a.config):
+        safety.refuse_if_shared(a.config, "report config")  # it decides branding, links and notes in the package: refuse a shared file
+        CFG = load_json(a.config)
+
+    def pshow(v):  # working directories and path-shaped entry points: last component only unless --package-paths
+        return v if a.package_paths else short_path(v)
     HOST_DESC = CFG.get("hosts", {})
     S = load_json(os.path.join(a.compiled, "summary.json"))
     A = load_json(os.path.join(a.compiled, "analysis.json"))
@@ -483,8 +552,10 @@ def main():
     rows = []
     for i in inv:
         for r in i["roots"]:
-            rows.append([i["host"], TOOL_NAME.get(r["tool"], r["tool"]), "`%s`" % r["root"], fmt(r.get("events", 0)), fmt(r.get("prompts", 0)), fmt(r.get("sqlite_threads", 0)) if r.get("sqlite_threads") else "–", compact(r["sqlite_tokens_used"]) if r.get("sqlite_tokens_used") else "–"])
+            rows.append([i["host"], TOOL_NAME.get(r["tool"], r["tool"]), "`%s`" % (r["root"] if a.package_paths else root_tail(r["root"])), fmt(r.get("events", 0)), fmt(r.get("prompts", 0)), fmt(r.get("sqlite_threads", 0)) if r.get("sqlite_threads") else "–", compact(r["sqlite_tokens_used"]) if r.get("sqlite_tokens_used") else "–"])
     D.table(["Host", "Tool", "Root scanned", "Calls found", "Prompts", "Tool's thread count", "Tool's token total"], rows, ["l", "l", "l", "r", "r", "r", "r"])
+    if not a.package_paths:
+        D.p("Scan roots are shown by their last path component only; the full paths stay on the machine unless the manifest sets `package_paths: true`.")
     D.p("Scan statistics: " + "; ".join("**%s** %s files, %.1f GB, %s lines, %s JSON errors, %s replayed Codex token events skipped, %s duplicates skipped, %ss" % (i["host"], fmt(i["files"]), i["bytes"] / 1e9, fmt(i["lines"]), fmt(i["json_errors"]), fmt(i["codex_replay_skipped"]), fmt(i["dedup_skipped"]), i["seconds"]) for i in inv) + ".")
     D.h(3, "Sources examined and excluded")
     excl = []
@@ -528,6 +599,11 @@ def main():
             "credential files, minimised": "Accounts were identified from the credential files on each host with identity minimised: pseudonymous account ids and plan types only, no e-mail addresses or organisation names.",
             "unspecified": "The accounts file does not record how it was drafted; treat its labels as operator-supplied."}.get(_src, "Accounts were identified from the credential files on each host.")
     D.p(_how + " Codex rollouts record the billing plan on every call (`rate_limits.plan_type`) but not the account, so calls are attributed to accounts by ordered rules in `accounts.json`; each rule carries its evidence and a confidence level. A subscription month is counted only when the account recorded at least one call in that month.")
+    _un = next((r for r in ACC.get("by_account", []) if r.get("account") == "unattributed"), None)
+    if _un:
+        D.p("**Unattributed calls.** %s calls (%s tokens, %s API-equivalent) matched no rule in `accounts.json`. They are reported under the account `unattributed` with billing `unknown` rather than folded into any real account; add a rule to `accounts.json` to attribute them." % (fmt(_un["calls"]), compact(_un["total"]), money(_un["api_cost_usd"])))
+    elif ACC:
+        D.p("**Unattributed calls.** None: every call matched a rule in `accounts.json`.")
     if AREG:
         D.table(["Account", "Identity", "Plan", "Price", "Evidence"], [["`%s`" % k, v.get("label", ""), v.get("plan", ""), "$%d/mo" % v.get("monthly_usd", 0) if v.get("monthly_usd") else ("unknown" if (ATOT.get(k) or {}).get("billing") == "unknown" else "usage-based / n.a."), v.get("evidence", "")] for k, v in AREG.items()], ["l"] * 5)
         D.table(["Rule (first match wins)", "Account", "Billing", "Confidence", "Why"], [["`%s`" % ", ".join("%s=%s" % kv for kv in r.get("when", {}).items()), "`%s`" % r["account"], r.get("billing", ""), r.get("confidence", ""), r.get("why", "")] for r in ARULES], ["l"] * 5)
@@ -621,6 +697,8 @@ def main():
         D.h(3, "4.1b By account")
         rows = [["`%s`" % k, t["label"], t["plan"], fmt(t["months"]), money(t["subscription_usd"]), money(t["api_equivalent_usd"]), money(t["api_if_uncached_usd"]), ("%s×" % t["api_to_sub_ratio"]) if t.get("api_to_sub_ratio") is not None else ("unknown" if t.get("billing") == "unknown" else "usage-based"), fmt(t["calls"]), compact(t["total"])] for k, t in sorted(ATOT.items(), key=lambda kv: -kv[1]["api_equivalent_usd"])]
         D.table(["Account", "Identity", "Plan", "Months", "Paid", "API-eq.", "If uncached", "API / sub", "Calls", "Tokens"], rows, ["l", "l", "l"] + ["r"] * 7)
+        if "unattributed" in ATOT:
+            D.p("The `unattributed` row holds the %s calls that matched no rule in `accounts.json` (see 2.4); it is not an account and carries no subscription." % fmt(ATOT["unattributed"]["calls"]))
         months_a = sorted({r["month"] for r in AROWS})
         sub_keys = [k for k, _ in sorted(sub_accounts.items(), key=lambda kv: -kv[1]["api_equivalent_usd"])]
         rows = []
@@ -675,12 +753,12 @@ def main():
     D.h(3, "4.6 Heaviest sessions")
     ts_ = A.get("top_sessions", [])
     D.table(["Tool", "Host", "Thread", "Working directory (tail)", "Model", "Calls", "Hours", "Tokens", "Output", "API-eq."],
-            [[TOOL_NAME.get(s["tool"], s["tool"]), s["host"], "`%s`" % s["session"][:13], (s["cwd"] or "")[-48:], s["model"], fmt(s["calls"]), "%.0f" % (s["hours"] or 0), compact(s["total"]), compact(s["output"]), money(s["cost"])] for s in ts_[:20]], ["l"] * 5 + ["r"] * 5)
+            [[TOOL_NAME.get(s["tool"], s["tool"]), s["host"], "`%s`" % s["session"][:13], pshow(s["cwd"] or "")[-48:], s["model"], fmt(s["calls"]), "%.0f" % (s["hours"] or 0), compact(s["total"]), compact(s["output"]), money(s["cost"])] for s in ts_[:20]], ["l"] * 5 + ["r"] * 5)
     D.figure(svg_bars([("%s · %s" % (TOOL_NAME.get(s["tool"], s["tool"]), tail(s["cwd"]) or s["session"][:8]), s["total"]) for s in ts_[:12]], "Top sessions by tokens", compact), "Figure 5. Twelve largest sessions by tokens.", "*Figure 5 (largest sessions) is rendered in the HTML version.*")
     D.h(3, "4.7 Working directories")
-    D.table(["Tool", "Directory", "Sessions", "Calls", "Tokens", "API-eq."], [[TOOL_NAME.get(r["tool"], r["tool"]), "`%s`" % r["cwd"], fmt(r["sessions"]), fmt(r["calls"]), compact(r["total"]), money(r["api_cost_usd"])] for r in S["by_project"][:20]], ["l", "l", "r", "r", "r", "r"])
+    D.table(["Tool", "Directory", "Sessions", "Calls", "Tokens", "API-eq."], [[TOOL_NAME.get(r["tool"], r["tool"]), "`%s`" % pshow(r["cwd"]), fmt(r["sessions"]), fmt(r["calls"]), compact(r["total"]), money(r["api_cost_usd"])] for r in S["by_project"][:20]], ["l", "l", "r", "r", "r", "r"])
     D.h(3, "4.8 Entry points, effort and versions")
-    D.table(["Tool", "Entry point / originator", "Calls", "Tokens", "API-eq."], [[TOOL_NAME.get(r["tool"], r["tool"]), r["entrypoint"], fmt(r["calls"]), compact(r["total"]), money(r["cost"])] for r in A.get("entrypoints", [])[:12]], ["l", "l", "r", "r", "r"])
+    D.table(["Tool", "Entry point / originator", "Calls", "Tokens", "API-eq."], [[TOOL_NAME.get(r["tool"], r["tool"]), pshow(r["entrypoint"]), fmt(r["calls"]), compact(r["total"]), money(r["cost"])] for r in A.get("entrypoints", [])[:12]], ["l", "l", "r", "r", "r"])
     rows = [[TOOL_NAME.get(t, t), k, fmt(v["calls"]), compact(v["output"]), pctf(v["reasoning"] / v["output"]) if v["output"] else "–", money(v["cost"])] for t in tools_present[:2] for k, v in sorted(A.get("effort", {}).get(t, {}).items(), key=lambda kv: -kv[1]["calls"])]
     D.table(["Tool", "Effort setting", "Calls", "Output", "Reasoning share", "API-eq."], rows, ["l", "l", "r", "r", "r", "r"])
     D.p("Client versions seen: " + "; ".join("**%s** %s" % (TOOL_NAME.get(t, t), ", ".join("%s (%s)" % (v, fmt(c)) for v, c in vs[:6])) for t, vs in A.get("versions", {}).items() if t in tools_present[:2]) + ".")
@@ -726,7 +804,7 @@ def main():
         ["Usage-based", "A call billed per token to a prepaid or metered org rather than covered by a subscription."],
     ], ["l", "l"])
     D.h(2, "Appendix B. Package contents")
-    D.ul(["`USAGE_REPORT.md` — this document.", "`report.html` — the same document with the figures rendered.", "`ledger.json` — machine-readable totals, monthly and model tables, top sessions, validation results, sensitivity, accounts, source inventory and the pricing sheet used.", "`pricing.json` — the rate sheet applied.", "`SHA256SUMS` — binds the files above."])
+    D.ul(["`USAGE_REPORT.md` — this document.", "`report.html` — the same document with the figures rendered.", "`ledger.json` — machine-readable totals, monthly and model tables, top sessions, validation results, sensitivity, accounts, source inventory and the pricing sheet used" + (" (with absolute scan roots, full working directories and the report configuration: `package_paths` is on)." if a.package_paths else " (scan roots and working directories reduced to their last path component; the report configuration omitted)."), "`pricing.json` — the rate sheet applied.", "`SENSITIVITY.md` — what in this package names hosts, directories, accounts or paths, and how to check or anonymise it before sharing.", "`SHA256SUMS` — binds the files above."])
 
     # ---- write package
     os.makedirs(a.out, exist_ok=True)
@@ -736,16 +814,20 @@ def main():
         ("snapshot_date", a.date), ("generated_utc", gen.isoformat()), ("timezone", a.tz),
         ("scope", {"tools": tools_present, "hosts": hosts_all, "first_date": dates[0] if dates else None, "last_date": dates[-1] if dates else None, "active_days": len(dates)}),
         ("totals", T), ("events", total_calls), ("sessions", S["sessions"]), ("prompts", S["prompts"]),
-        ("by_tool", S["by_tool"]), ("by_tool_host", S["by_tool_host"]), ("by_month_tool", by_month), ("by_model", by_model), ("by_kind", S["by_kind"]), ("by_entrypoint", S["by_entrypoint"]),
-        ("by_project_top", S["by_project"]), ("top_sessions", A.get("top_sessions", [])),
+        ("by_tool", S["by_tool"]), ("by_tool_host", S["by_tool_host"]), ("by_month_tool", by_month), ("by_model", by_model), ("by_kind", S["by_kind"]),
+        ("by_entrypoint", S["by_entrypoint"] if a.package_paths else redact_rows(S["by_entrypoint"], "entrypoint")),
+        ("by_project_top", S["by_project"] if a.package_paths else redact_rows(S["by_project"], "cwd")),
+        ("top_sessions", A.get("top_sessions", []) if a.package_paths else redact_rows(A.get("top_sessions", []), "cwd")),
         ("subscriptions", {"totals": ST, "rows": sub_rows}), ("accounts", ACC),
         ("caching", {"by_month": A.get("cache_month"), "ttl_split_claude": ttl, "blended_rates": blended}),
         ("distributions", {"per_call": dist, "per_session": sdist, "concentration": conc}),
         ("time_of_day", {"weekday_hour_calls": hw}), ("effort", A.get("effort")), ("versions", A.get("versions")),
         ("validation", {"codex_sqlite": val, "codex_app_total_with_replay": sq_total, "claude_stats_cache": [{"host": h, "model": m, "tokens": t, "output": o, "api_equivalent_usd": c} for h, m, t, o, c in sc_rows]}),
-        ("sensitivity", sens), ("coverage", {"%s|%s" % k: v for k, v in cov.items()}), ("scan_inventory", inv),
-        ("pricing", P), ("config", CFG), ("script_hashes", dict(hashes)),
+        ("sensitivity", sens), ("coverage", {"%s|%s" % k: v for k, v in cov.items()}), ("scan_inventory", inv if a.package_paths else redact_inventory(inv)),
+        ("pricing", P), ("script_hashes", dict(hashes)),
     ])
+    if a.package_paths:  # the report config names hosts, directories and branding contacts: packaged only on request
+        ledger["config"] = CFG
     with open(os.path.join(a.out, "ledger.json"), "w", encoding="utf-8") as fh:
         json.dump(ledger, fh, indent=1, default=str)
     shutil.copy(a.pricing, os.path.join(a.out, "pricing.json"))
@@ -758,10 +840,13 @@ Start with `USAGE_REPORT.md` (or `report.html` for the figures). It contains the
 
 `ledger.json` is the machine-readable ledger. `pricing.json` is the rate sheet applied.
 
+`SENSITIVITY.md` lists what in this package names hosts, project directories, accounts or file-system paths, and how to check or anonymise it before it is shared. Read it before sending the package anywhere.
+
 Nothing was changed on any host. Dollar figures are API-equivalents at list prices, not invoices. Claude Code figures are lower bounds where the tool's retention window has deleted transcripts.
 
 SHA256SUMS binds the content files in this package.
 """ % (a.date, a.tz))
+    write_sensitivity(a.out, a.package_paths)
     with open(os.path.join(a.out, "report.html"), "w", encoding="utf-8") as fh:
         _style, _header, _footer, _link = brand_blocks(CFG, os.path.dirname(os.path.abspath(a.config)) if a.config else None)
         _theme = str(CFG.get("theme_default") or "system")
