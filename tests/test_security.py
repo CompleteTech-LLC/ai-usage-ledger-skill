@@ -505,6 +505,36 @@ def check_private_permissions():
         os.umask(old)
 
 
+def _raises(fn):
+    try:
+        fn()
+        return False
+    except SystemExit:
+        return True
+
+
+def check_shared_predicates():
+    """safety.is_credential_file / clean_for_terminal / validate_study_url / check_generic_root."""
+    cred_yes = ["/home/u/.codex/auth.json", "C:\\Users\\u\\.claude\\.credentials.json", "/srv/app/credentials.json", "/x/token.json", "/x/api_key.txt",
+                "/x/server.pem", "/x/private.key", "/home/u/.env", "/home/u/.env.local", "/home/u/.ssh/config", "/home/u/.aws/credentials", "/x/my-secret-notes.md", "/x/id_rsa.pub"]
+    cred_no = ["/home/u/.codex/sessions/2026/09/01/rollout-x.jsonl", "/home/u/.claude/projects/p/s.jsonl", "/x/usage.csv", "/x/events.jsonl", "/home/u/.local/share/opencode/opencode.db"]
+    c1 = all(safety.is_credential_file(x) for x in cred_yes)
+    c2 = not any(safety.is_credential_file(x) for x in cred_no)
+    cleaned = safety.clean_for_terminal("ok\x1b[31mred\x1b[0m\x07bell\x9bZ\ttab\nline")
+    c3 = "\x1b" not in cleaned and "\x07" not in cleaned and "\x9b" not in cleaned and "\ttab\nline" in cleaned and cleaned.startswith("okred")
+    c4 = len(safety.clean_for_terminal("x" * 10000, limit=100)) < 200
+    urls_bad = ["javascript:alert(1)", "data:text/html,x", "//evil.example/x", "http://example.com/x", " https://ok.example/x", "https://ok.example/x\n", "vbscript:x", "https:///nohost"]
+    u1 = all(_raises(lambda v=v: safety.validate_study_url(v)) for v in urls_bad)
+    u2 = safety.validate_study_url("https://claude.ai/code/artifact/abc") == "https://claude.ai/code/artifact/abc" and safety.validate_study_url("") == ""
+    home = os.path.expanduser("~")
+    roots_bad = [home, "C:\\", "/", os.path.join(home, "AppData", "Roaming"), os.path.join(home, ".config"), os.path.join(home, "Documents"), "/home", os.path.join(home, ".local", "share")]
+    g1 = all(_raises(lambda r=r: safety.check_generic_root(r)) for r in roots_bad)
+    g2 = all(not _raises(lambda r=r: safety.check_generic_root(r)) for r in (os.path.join(home, ".config", "manicode"), os.path.join(home, ".factory", "sessions"), "/srv/openclaw/config", os.path.join(home, "AppData", "Local", "hermes")))
+    good = c1 and c2 and c3 and c4 and u1 and u2 and g1 and g2
+    print("predicates: credential files %s/%s, terminal cleaning %s, study_url %s/%s, generic root %s/%s  %s" % (c1, c2, c3 and c4, u1, u2, g1, g2, "OK" if good else "FAIL"))
+    return good
+
+
 def check_examples_self_contained():
     bad = []
     for fn in ("example.html", "example-study.html"):
@@ -537,6 +567,7 @@ def main():
     ok = check_neutral_branding() and ok
     ok = check_credential_minimisation() and ok
     ok = check_persistence_consent() and ok
+    ok = check_shared_predicates() and ok
     ok = check_archive_boundaries() and ok
     ok = check_private_permissions() and ok
     print("SECURITY OK" if ok else "SECURITY CHECKS FAILED")

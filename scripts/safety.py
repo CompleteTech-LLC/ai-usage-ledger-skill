@@ -272,3 +272,65 @@ def sanitize_branding(b, base_dir=None, logo_to_data_uri=None):
 if __name__ == "__main__":
     import json
     print(json.dumps(sanitize_branding(json.loads(sys.stdin.read() or "{}")), indent=2))
+
+# ---------------------------------------------------------------------------------------------- shared predicates
+_CRED_BASENAMES = ("auth.json", ".credentials.json", "credentials.json", ".env", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa")
+_CRED_PATTERNS = re.compile(r"(?:^|[^a-z])(?:token|secret|credential|password|passwd|apikey|api_key)(?:[^a-z]|$)|\.pem$|\.key$|\.p12$|\.pfx$|^\.env\.|^id_rsa|^id_ed25519", re.IGNORECASE)
+_CRED_DIRS = {".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker"}
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]|\x9b[0-?]*[ -/]*[@-~]")
+_CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
+
+def is_credential_file(path):
+    """True for anything that looks like a credential, key or secret store: never archived, scanned or copied."""
+    p = str(path or "").replace("\\", "/")
+    base = p.rstrip("/").split("/")[-1]
+    if base.lower() in _CRED_BASENAMES or _CRED_PATTERNS.search(base):
+        return True
+    return any(part in _CRED_DIRS for part in p.split("/")[:-1])
+
+
+def clean_for_terminal(text, limit=4000):
+    """Strip ANSI escape sequences and control characters (except newline and tab) from text that came from a
+    subprocess, a remote host or a data file before it is printed, and cap its length."""
+    s = str(text or "")
+    s = _ANSI.sub("", s)
+    s = _CTRL.sub("", s)
+    if len(s) > limit:
+        s = s[:limit] + "... [%d more characters]" % (len(s) - limit)
+    return s
+
+
+def validate_study_url(value):
+    """An external study link may only be an absolute HTTPS URL; anything else (javascript:, data:, //host, http:,
+    control characters) is refused and the caller must drop it."""
+    from urllib.parse import urlparse
+    v = str(value or "")
+    if not v:
+        return ""
+    if v != v.strip() or _CONTROL.search(v):
+        raise UnsafeValue("study_url contains whitespace or control characters")
+    parsed = urlparse(v)
+    if parsed.scheme.lower() != "https" or not parsed.netloc or v.startswith("//"):
+        raise UnsafeValue("study_url must be an absolute https:// URL: %r" % v[:80])
+    return v
+
+
+_BROAD_DIRS = {"", "appdata", "roaming", "local", ".config", ".local", "share", "documents", "desktop", "downloads", "users", "home", "library", "application support"}
+
+
+def check_generic_root(path):
+    """A generic-sniffer root must point at one tool's own directory, never at a home, a drive root or a broad
+    container such as AppData or .config, because every JSON file below it will be read."""
+    p = str(path or "").replace("\\", "/").rstrip("/")
+    check_path(p, "generic root")
+    home = os.path.expanduser("~").replace("\\", "/").rstrip("/")
+    norm = p.lower()
+    if norm in ("", home.lower()) or re.fullmatch(r"[a-z]:", norm) or norm in ("/", "/home", "/users", "/root", "/mnt", "/srv", "/opt", "/var", "/tmp"):
+        raise UnsafeValue("generic root %r is a home, drive or system root; point it at the tool's own directory" % p)
+    parts = [x for x in norm.split("/") if x]
+    last = parts[-1] if parts else ""
+    if last in _BROAD_DIRS:
+        raise UnsafeValue("generic root %r is a broad directory; point it at the tool's own directory below it" % p)
+    return p
+
