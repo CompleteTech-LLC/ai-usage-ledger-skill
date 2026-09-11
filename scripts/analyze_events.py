@@ -24,6 +24,10 @@ except ImportError:  # pragma: no cover
 
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import safety  # noqa: E402
+
 
 def pct(sorted_vals, q):
     if not sorted_vals:
@@ -271,7 +275,7 @@ def main():
         "sensitivity": sensitivity,
         "seconds": round(time.time() - t0, 1),
     }
-    with open(os.path.join(a.compiled, "analysis.json"), "w", encoding="utf-8") as f:
+    with safety.private_open(os.path.join(a.compiled, "analysis.json"), "w") as f:
         json.dump(out, f, indent=1, default=lambda o: list(o) if isinstance(o, set) else str(o))
     sys.stderr.write("analysis.json written (%.0fs)\n" % (time.time() - t0))
 

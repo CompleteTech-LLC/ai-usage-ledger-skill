@@ -98,7 +98,7 @@ def scan_host(host, scans_dir, python="python", capture_prompts=False):
     kind = host.get("kind", "local")
     name = host["name"]
     out_dir = os.path.join(scans_dir, name)
-    os.makedirs(out_dir, exist_ok=True)
+    safety.private_dir(out_dir)  # scan artifacts carry prompts, project paths and session ids
     if kind == "local" or kind == "share":
         run([safety.validate_local_python(host, python), SCANNER] + scan_args(host, capture_prompts) + ["--out-dir", out_dir])
     elif kind == "wsl":
@@ -141,7 +141,7 @@ def scan_host(host, scans_dir, python="python", capture_prompts=False):
                 for p in alt["opencode_dbs"]:
                     dst = os.path.join(out_dir, os.path.basename(p))
                     try:
-                        shutil.copy(p, dst)
+                        safety.private_copy(p, dst)
                         copies.append(dst)
                     except OSError as ex:
                         log("could not copy %s: %s" % (p, ex))
@@ -151,11 +151,17 @@ def scan_host(host, scans_dir, python="python", capture_prompts=False):
         # every remote-shell word is validated against a strict grammar and quoted; the target is checked so it
         # cannot smuggle ssh/scp options
         target, remote_tmp, remote_python = safety.validate_ssh_host(host)
-        run(["ssh", "-o", "BatchMode=yes", "--", target, "mkdir -p -- " + shlex.quote(remote_tmp)])
-        run(["scp", "-q", "--", SCANNER, "%s:%s" % (target, shlex.quote(remote_tmp + "/compile_ai_logs.py"))])
-        cmd = " ".join([shlex.quote(remote_python), shlex.quote(remote_tmp + "/compile_ai_logs.py")] + [shlex.quote(x) for x in scan_args(host, capture_prompts)] + ["--out-dir", shlex.quote(remote_tmp + "/out")])
-        run(["ssh", "-o", "BatchMode=yes", "--", target, cmd])
-        run(["scp", "-q", "--", "%s:%s" % (target, shlex.quote(remote_tmp + "/out") + "/*"), out_dir])
+        try:
+            # owner-only staging (0700) before anything is written; the scanner tightens its own out dir and files
+            run(["ssh", "-o", "BatchMode=yes", "--", target, "install -d -m 700 -- " + shlex.quote(remote_tmp)])
+            run(["scp", "-q", "--", SCANNER, "%s:%s" % (target, shlex.quote(remote_tmp + "/compile_ai_logs.py"))])
+            run(["scp", "-q", "--", os.path.join(HERE, "safety.py"), "%s:%s" % (target, shlex.quote(remote_tmp + "/safety.py"))])
+            cmd = " ".join([shlex.quote(remote_python), shlex.quote(remote_tmp + "/compile_ai_logs.py")] + [shlex.quote(x) for x in scan_args(host, capture_prompts)] + ["--out-dir", shlex.quote(remote_tmp + "/out")])
+            run(["ssh", "-o", "BatchMode=yes", "--", target, cmd])
+            run(["scp", "-q", "--", "%s:%s" % (target, shlex.quote(remote_tmp + "/out") + "/*"), out_dir])
+        finally:
+            # the staging dir holds the scanner, prompts and scanned data: remove it after retrieval, on success and failure alike
+            run(["ssh", "-o", "BatchMode=yes", "--", target, "rm -rf -- " + shlex.quote(remote_tmp)], check=False)
     else:
         raise SystemExit("unknown host kind %r" % kind)
     # optional: stage Codex sqlite and Claude stats-cache for validation
@@ -175,7 +181,8 @@ def scan_host(host, scans_dir, python="python", capture_prompts=False):
                 share = host.get("share_fallback", "")
                 shutil.copy(share.rstrip("/\\") + src, dst)
             else:
-                shutil.copy(src, dst)
+                safety.private_copy(src, dst)
+            safety.private_file(dst)
             staged[key] = dst
         except Exception as ex:
             log("could not stage %s for %s: %s" % (key, name, ex))
@@ -202,13 +209,14 @@ def main():
     steps = set(a.only.split(","))
     mdir0 = os.path.dirname(os.path.abspath(a.manifest))
     work = os.path.abspath(os.path.join(mdir0, M.get("workdir", ".")))
+    safety.private_dir(work)  # everything below the working directory holds scan and report data
     scans = os.path.join(work, "scans")
     compiled = os.path.join(work, "compiled")
     reports = os.path.join(work, "reports")
     date = M.get("snapshot_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pkg = os.path.join(reports, "%s_%s" % (M.get("package_prefix", "AI_Usage_Ledger"), date))
     for d in (scans, compiled, reports):
-        os.makedirs(d, exist_ok=True)
+        safety.private_dir(d)  # compiled tables and reports embed project paths and account labels
     mdir = os.path.dirname(os.path.abspath(a.manifest))
 
     def rel(p):  # manifest-relative paths become absolute so every step can run from any cwd
@@ -281,16 +289,17 @@ def main():
                 cmd += ["--stats-cache", "%s=%s" % (h["name"], p)]
         run(cmd)
         if accounts and os.path.isfile(accounts) and M.get("package_accounts"):  # off by default: it names people and organisations
-            shutil.copy(accounts, os.path.join(pkg, "accounts.json"))
-            with open(os.path.join(pkg, "SENSITIVITY.md"), "a", encoding="utf-8") as fh:  # build_report wrote the general notice; add the accounts paragraph
+            safety.private_copy(accounts, os.path.join(pkg, "accounts.json"))
+            with safety.private_open(os.path.join(pkg, "SENSITIVITY.md"), "a") as fh:  # build_report wrote the general notice; add the accounts paragraph
                 fh.write("\n## accounts.json is included\n\nThis package includes `accounts.json` (`package_accounts: true`), which names accounts (identifiers, plans and possibly "
                          "e-mail addresses or organisation names) and the credential files they were read from. Treat the package as internal.\n")
             import build_report
             build_report.write_sums(pkg)  # the checksum file binds the optional files too
         zpath = pkg + ".zip"
-        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
-            for fn in sorted(os.listdir(pkg)):
-                z.write(os.path.join(pkg, fn), os.path.join(os.path.basename(pkg), fn))
+        with safety.private_open(zpath, "wb") as zfh:  # the archive repeats the package's contents; keep it owner-only too
+            with zipfile.ZipFile(zfh, "w", zipfile.ZIP_DEFLATED) as z:
+                for fn in sorted(os.listdir(pkg)):
+                    z.write(os.path.join(pkg, fn), os.path.join(os.path.basename(pkg), fn))
         log("package: %s  (sha256 %s)" % (zpath, sha256(zpath)[:16]))
         log("dashboard: %s" % os.path.join(compiled, "agent-ledger.html"))
         log("report: %s" % os.path.join(pkg, "USAGE_REPORT.md"))
