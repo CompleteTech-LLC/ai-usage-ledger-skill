@@ -16,7 +16,6 @@ import glob
 import hashlib
 import json
 import os
-import shutil
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import safety  # noqa: E402
@@ -373,14 +372,14 @@ def write_sensitivity(out_dir, package_paths):
     paths = ("absolute scan roots, full working directories and the report configuration ARE included in `ledger.json` because the manifest sets `package_paths: true`; they name user profiles and drives."
              if package_paths else
              "absolute scan roots, full working directories and the report configuration are omitted from `ledger.json` (only the last path component of each root and directory is kept); set `package_paths: true` in the manifest to include them.")
-    with open(os.path.join(out_dir, "SENSITIVITY.md"), "w", encoding="utf-8") as fh:
+    with safety.private_open(os.path.join(out_dir, "SENSITIVITY.md"), "w") as fh:
         fh.write(SENSITIVITY_MD % {"paths": paths})
 
 
 def write_sums(out_dir):
     """SHA256SUMS over every regular file in the package except itself; run_pipeline calls it again after adding optional files."""
     names = sorted(n for n in os.listdir(out_dir) if n != "SHA256SUMS" and os.path.isfile(os.path.join(out_dir, n)))
-    with open(os.path.join(out_dir, "SHA256SUMS"), "w", encoding="utf-8") as fh:
+    with safety.private_open(os.path.join(out_dir, "SHA256SUMS"), "w") as fh:
         for name in names:
             fh.write("%s  %s\n" % (sha256(os.path.join(out_dir, name)), name))
 
@@ -807,8 +806,8 @@ def main():
     D.ul(["`USAGE_REPORT.md` — this document.", "`report.html` — the same document with the figures rendered.", "`ledger.json` — machine-readable totals, monthly and model tables, top sessions, validation results, sensitivity, accounts, source inventory and the pricing sheet used" + (" (with absolute scan roots, full working directories and the report configuration: `package_paths` is on)." if a.package_paths else " (scan roots and working directories reduced to their last path component; the report configuration omitted)."), "`pricing.json` — the rate sheet applied.", "`SENSITIVITY.md` — what in this package names hosts, directories, accounts or paths, and how to check or anonymise it before sharing.", "`SHA256SUMS` — binds the files above."])
 
     # ---- write package
-    os.makedirs(a.out, exist_ok=True)
-    with open(os.path.join(a.out, "USAGE_REPORT.md"), "w", encoding="utf-8") as fh:
+    safety.private_dir(a.out)
+    with safety.private_open(os.path.join(a.out, "USAGE_REPORT.md"), "w") as fh:
         fh.write("\n".join(D.md))
     ledger = OrderedDict([
         ("snapshot_date", a.date), ("generated_utc", gen.isoformat()), ("timezone", a.tz),
@@ -828,10 +827,10 @@ def main():
     ])
     if a.package_paths:  # the report config names hosts, directories and branding contacts: packaged only on request
         ledger["config"] = CFG
-    with open(os.path.join(a.out, "ledger.json"), "w", encoding="utf-8") as fh:
+    with safety.private_open(os.path.join(a.out, "ledger.json"), "w") as fh:
         json.dump(ledger, fh, indent=1, default=str)
-    shutil.copy(a.pricing, os.path.join(a.out, "pricing.json"))
-    with open(os.path.join(a.out, "README.md"), "w", encoding="utf-8") as fh:
+    safety.private_copy(a.pricing, os.path.join(a.out, "pricing.json"))
+    with safety.private_open(os.path.join(a.out, "README.md"), "w") as fh:
         fh.write("""# AI usage ledger package
 
 Snapshot date: %s (%s). Read-only study of locally recorded AI coding-agent usage.
@@ -847,7 +846,7 @@ Nothing was changed on any host. Dollar figures are API-equivalents at list pric
 SHA256SUMS binds the content files in this package.
 """ % (a.date, a.tz))
     write_sensitivity(a.out, a.package_paths)
-    with open(os.path.join(a.out, "report.html"), "w", encoding="utf-8") as fh:
+    with safety.private_open(os.path.join(a.out, "report.html"), "w") as fh:
         _style, _header, _footer, _link = brand_blocks(CFG, os.path.dirname(os.path.abspath(a.config)) if a.config else None)
         _theme = str(CFG.get("theme_default") or "system")
         fh.write(HTML_HEAD.replace("__TITLE__", _html.escape(str(CFG.get("html_title", "Agent Usage Study")), quote=True)) + _link + _style + THEME_JS.replace("__THEME_DEFAULT__", _theme if _theme in ("light", "dark", "system") else "system") + THEMEBAR_HTML + '<div class="wrap">' + _header + "\n".join(D.html) + _footer + "</div>")

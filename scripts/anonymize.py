@@ -23,12 +23,20 @@ read their own published figures; it is never included in the outputs.
 
 Standard library only.
 """
+
 import argparse
 import hashlib
 import json
 import os
 import re
 import secrets
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import safety as _safety  # noqa: E402
+except ImportError:  # standalone use outside the skill directory
+    _safety = None
 
 # fields whose values are never paths or identities and are kept verbatim
 KEEP = {"tool", "model", "ts", "date", "kind", "plan", "billing", "account_confidence", "version", "effort", "service_tier", "granularity", "priced_as",
@@ -169,7 +177,8 @@ class Anonymizer:
 def anonymize_jsonl(an, src, dst, kind="events"):
     fn = an.event if kind == "events" else an.session_row
     n = 0
-    with open(src, "rb") as fi, open(dst, "w", encoding="utf-8") as fo:
+    _open = _safety.private_open(dst, "w") if _safety is not None else open(dst, "w", encoding="utf-8")
+    with open(src, "rb") as fi, _open as fo:
         for raw in fi:
             try:
                 row = json.loads(raw)
@@ -196,13 +205,13 @@ def main():
     elif a.accounts:
         with open(a.accounts, encoding="utf-8") as fh:
             AC = json.load(fh)
-        with open(a.out, "w", encoding="utf-8") as fh:
+        with (_safety.private_open(a.out, "w") if _safety is not None else open(a.out, "w", encoding="utf-8")) as fh:
             json.dump(an.accounts(AC), fh, indent=2)
         print("accounts anonymised")
     elif a.inventory:
         with open(a.inventory, encoding="utf-8") as fh:
             inv = json.load(fh)
-        with open(a.out, "w", encoding="utf-8") as fh:
+        with (_safety.private_open(a.out, "w") if _safety is not None else open(a.out, "w", encoding="utf-8")) as fh:
             json.dump(an.inventory(inv), fh, indent=2)
         print("inventory anonymised")
     else:

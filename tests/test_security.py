@@ -775,6 +775,77 @@ def check_private_run_files():
         return good
     finally:
         os.umask(old)
+def check_output_permissions():
+    """Audit T09 (1.5.12): scan, compiled, report, package, dashboard and archive outputs are created owner-only
+    (0700 dirs, 0600 files) even under a permissive umask, and a stale permissive file is repaired."""
+    if os.name == "nt":
+        print("outputs:   skipped on Windows (NTFS profile ACLs; POSIX modes are checked in CI)  OK")
+        return True
+    import tempfile
+    old = os.umask(0o022)
+    try:
+        work = tempfile.mkdtemp(prefix="ledger-outputs-")
+        # --- direct scanner run, prompts ON, into a dir whose stale files are group/world readable
+        scan = os.path.join(work, "direct", "scans", "fixture")
+        os.makedirs(scan, exist_ok=True)
+        os.chmod(os.path.join(work, "direct"), 0o755)
+        os.chmod(os.path.join(work, "direct", "scans"), 0o755)
+        os.chmod(scan, 0o755)
+        for stale in ("events.fixture.jsonl", "inventory.fixture.json"):
+            p = os.path.join(scan, stale)
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("")
+            os.chmod(p, 0o644)
+        compiled = os.path.join(work, "direct", "compiled")
+        r1 = run([PY, os.path.join(SCRIPTS, "compile_ai_logs.py"), "scan", "--host", "fixture", "--out-dir", scan,
+                  "--claude-root", os.path.join(FX, "claude"), "--codex-root", os.path.join(FX, "codex")])
+        r2 = run([PY, os.path.join(SCRIPTS, "compile_ai_logs.py"), "report", "--events", os.path.join(scan, "events.fixture.jsonl"),
+                  "--sessions", os.path.join(scan, "sessions.fixture.jsonl"), "--prompts", os.path.join(scan, "prompts.fixture.jsonl"),
+                  "--inventory", os.path.join(scan, "inventory.fixture.json"), "--pricing", os.path.join(ROOT, "templates", "pricing.json"), "--out-dir", compiled])
+        # --- full pipeline into a second temp workdir: dashboard, package and archive of the run
+        pipe = os.path.join(work, "pipe")
+        os.makedirs(pipe, exist_ok=True)
+        manifest = os.path.join(pipe, "manifest.json")
+        with open(manifest, "w", encoding="utf-8") as fh:
+            json.dump({"workdir": ".", "timezone": "UTC", "snapshot_date": "2026-01-02", "package_prefix": "Perm_Ledger",
+                       "pricing": os.path.join(ROOT, "templates", "pricing.json"),
+                       "hosts": [{"name": "fixture", "kind": "local", "claude_roots": [os.path.join(FX, "claude")], "codex_roots": [os.path.join(FX, "codex")]}]}, fh)
+        r3 = run([PY, os.path.join(SCRIPTS, "run_pipeline.py"), "--manifest", manifest])
+        pkg = os.path.join(pipe, "reports", "Perm_Ledger_2026-01-02")
+        dirs = {"scan-dir": (scan, 0o700), "compiled": (compiled, 0o700),
+                "pipe-work": (pipe, 0o700), "pipe-scans": (os.path.join(pipe, "scans"), 0o700), "pipe-compiled": (os.path.join(pipe, "compiled"), 0o700),
+                "reports": (os.path.join(pipe, "reports"), 0o700), "package": (pkg, 0o700)}
+        files = {"events": (os.path.join(scan, "events.fixture.jsonl"), 0o600), "prompts": (os.path.join(scan, "prompts.fixture.jsonl"), 0o600),
+                 "sessions": (os.path.join(scan, "sessions.fixture.jsonl"), 0o600), "inventory": (os.path.join(scan, "inventory.fixture.json"), 0o600),
+                 "all_events": (os.path.join(compiled, "all_events.csv"), 0o600), "summary.json": (os.path.join(compiled, "summary.json"), 0o600),
+                 "SUMMARY.md": (os.path.join(compiled, "SUMMARY.md"), 0o600), "by_tool": (os.path.join(compiled, "by_tool.csv"), 0o600),
+                 "all_prompts": (os.path.join(compiled, "all_prompts.jsonl"), 0o600),
+                 "analysis.json": (os.path.join(pipe, "compiled", "analysis.json"), 0o600),
+                 "dashboard": (os.path.join(pipe, "compiled", "agent-ledger.html"), 0o600),
+                 "USAGE_REPORT.md": (os.path.join(pkg, "USAGE_REPORT.md"), 0o600), "report.html": (os.path.join(pkg, "report.html"), 0o600),
+                 "ledger.json": (os.path.join(pkg, "ledger.json"), 0o600), "pricing.json": (os.path.join(pkg, "pricing.json"), 0o600),
+                 "README.md": (os.path.join(pkg, "README.md"), 0o600), "SENSITIVITY.md": (os.path.join(pkg, "SENSITIVITY.md"), 0o600),
+                 "SHA256SUMS": (os.path.join(pkg, "SHA256SUMS"), 0o600), "package.zip": (pkg + ".zip", 0o600)}
+        bad = {k: "missing" for k, (p, _) in {**dirs, **files}.items() if not os.path.exists(p)}
+        for k, (p, want) in {**dirs, **files}.items():
+            if os.path.exists(p):
+                have = os.stat(p).st_mode & 0o777
+                if have != want:
+                    bad[k] = "%s != %s" % (oct(have), oct(want))
+        # remote staging must be private and removed after retrieval, whatever the outcome
+        src = open(os.path.join(SCRIPTS, "run_pipeline.py"), encoding="utf-8").read()
+        remote_ok = "install -d -m 700" in src and "rm -rf -- " in src and "finally:" in src
+        good = r1.returncode == 0 and r2.returncode == 0 and r3.returncode == 0 and not bad and remote_ok
+        print("outputs:   %s; remote staging private+cleaned %s under umask 022  %s" % (
+            "all owner-only (0700/0600)" if not bad else "wrong: %s" % bad, remote_ok, "OK" if good else "FAIL"))
+        if not good:
+            print((r3.stderr or "")[-500:])
+        shutil.rmtree(work, ignore_errors=True)
+        return good
+    finally:
+        os.umask(old)
+
+
 def check_terminal_cleaning():
     """Issue #19: subprocess output and data text reach the terminal without escape sequences or C0 controls
     (schedule._run / status, run_pipeline.run / log, ledger_archive ssh log lines, ledger_query table, publish-check)."""
@@ -1086,6 +1157,7 @@ def main():
     ok = check_private_permissions() and ok
     ok = check_generic_root_guard() and ok
     ok = check_private_run_files() and ok
+    ok = check_output_permissions() and ok
     ok = check_study_url(compiled) and ok
     pkg_ok, default_pkg = check_package_sensitivity(compiled)
     ok = pkg_ok and ok

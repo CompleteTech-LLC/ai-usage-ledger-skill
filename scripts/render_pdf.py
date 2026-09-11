@@ -12,8 +12,12 @@ the catalog templates use: #/##/### headings, paragraphs, bullet lists, pipe tab
 """
 import argparse
 import html
+import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import safety  # noqa: E402
 
 BRAND = {"accent": "#1E3A8A", "ink": "#0F172A", "soft": "#EEF2FF", "muted": "#64748B", "border": "#E2E8F0", "zebra": "#F8FAFC",
          "name": "CompleteTech", "eyebrow": "COMPLETETECH LLC", "contact": "complete.tech · Timothy.Gregg@complete.tech"}
@@ -297,6 +301,9 @@ def main():
     with open(a.markdown, encoding="utf-8") as fh:
         md = fh.read()
     cfg = {"logo": a.logo, "title": a.title, "eyebrow": a.eyebrow, "doc_type": a.doc_type, "footer": a.footer, "accent": a.accent, "date": a.date}
+    for _out in (a.out, a.docx, a.png):  # rendered documents carry the ledger contents: keep them owner-only
+        if _out:
+            safety.private_dir(os.path.dirname(os.path.abspath(_out)) or ".")
     rc = 0
     if a.out:
         try:
@@ -318,6 +325,9 @@ def main():
             print("PNG:", a.png)
         except ImportError as ex:
             print("[skip PNG] %s; pip install pypdfium2 pillow" % ex, file=sys.stderr)
+    for _out in (a.out, a.docx, a.png):
+        if _out:
+            safety.private_file(_out)
     return rc
 
 

@@ -681,6 +681,7 @@ _style, _header, _footer, _link = brand_blocks(CFG, os.path.dirname(os.path.absp
 html = html.replace("__BRAND_STYLE__", _link + _style).replace("__BRAND_HEADER__", _header).replace("__BRAND_FOOTER__", _footer).replace("__THEMEBAR__", THEMEBAR_HTML)
 html = html.replace("__THEME_DEFAULT__", str(CFG.get("theme_default") or "system") if str(CFG.get("theme_default") or "system") in ("light", "dark", "system") else "system")
 html = html.replace("__PAGE_TITLE__", _html.escape(str(CFG.get("dashboard_title") or "Agent Token Ledger"), quote=True))
-os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-open(dst, "w", encoding="utf-8").write(html)
+safety.private_dir(os.path.dirname(os.path.abspath(dst)) or ".")
+with safety.private_open(dst, "w") as fh:
+    fh.write(html)
 print("wrote", dst, len(html) // 1024, "KB")

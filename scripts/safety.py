@@ -12,7 +12,7 @@ than become a command or markup. This module is the single place that enforces i
   warn_if_writable(path)           POSIX: warn when a config file is group- or world-writable
   sanitize_branding(b, base_dir)   escaped text, validated colours/tokens/fonts, local-only logo, opt-in extra CSS
   CSP_META                         a restrictive Content-Security-Policy for every generated HTML page
-  private_dir(path) / write_private(path, text) / private_file(path)
+  private_dir(path) / write_private(path, text) / private_file(path) / private_open(path) / private_copy(src, dst)
                                    0700 directories and 0600 files for everything the ledger keeps about its owner
   refuse_if_shared(path)           stop when a config file others can edit would be executed as configuration
   check_source_path(p)             grammar for a log file path that goes into an archive (local or remote)
@@ -21,9 +21,11 @@ than become a command or markup. This module is the single place that enforces i
 
 Standard library only.
 """
+import contextlib
 import html
 import os
 import re
+import shutil
 import stat
 import sys
 
@@ -149,6 +151,38 @@ def write_private(path, text, encoding="utf-8"):
     os.replace(tmp, path)
     private_file(path)
     return path
+
+
+@contextlib.contextmanager
+def private_open(path, mode="w", encoding="utf-8", newline=None):
+    """Open a sensitive output file with mode 0600 from the moment it is created; its directory becomes 0700.
+
+    The mode passed to os.open only applies when the file is created, so private_file() also repairs an existing
+    file that was opened with O_TRUNC and kept a wider mode. Use write_private() when the whole document is
+    already in memory and it can be replaced atomically."""
+    private_dir(os.path.dirname(os.path.abspath(path)) or ".")
+    base = mode.replace("b", "").replace("t", "")
+    flags = {"w": os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+             "a": os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+             "x": os.O_WRONLY | os.O_CREAT | os.O_EXCL}[base]
+    fd = os.open(path, flags, 0o600)
+    try:
+        if "b" in mode:
+            fh = os.fdopen(fd, "wb")
+        else:
+            fh = os.fdopen(fd, "w", encoding=encoding, newline=newline)
+        with fh:
+            yield fh
+    finally:
+        private_file(path)
+
+
+def private_copy(src, dst):
+    """Copy a sensitive file, then make the destination and its directory owner-only even over a permissive umask."""
+    private_dir(os.path.dirname(os.path.abspath(dst)) or ".")
+    shutil.copyfile(src, dst)
+    private_file(dst)
+    return dst
 
 
 def refuse_if_shared(path, what="configuration"):

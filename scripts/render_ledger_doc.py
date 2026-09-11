@@ -27,6 +27,7 @@ ROOT = os.path.dirname(HERE)
 CATALOG = os.path.join(ROOT, "references", "ledger-document-catalog.md")
 INDEX = os.path.join(ROOT, "references", "template-index.json")
 sys.path.insert(0, HERE)
+import safety  # noqa: E402
 
 
 # --------------------------------------------------------------------------- catalog
@@ -438,15 +439,15 @@ def main():
     if not out:
         base = os.path.dirname(os.path.dirname(compiled)) if compiled.endswith("anonymized" + os.sep + "compiled") else os.path.dirname(compiled)
         out = os.path.join(base, "documents", "%s-%s%s.md" % (a.template, P["date"], "-anon" if a.anonymize else ""))
-    os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
-    with open(out, "w", encoding="utf-8") as fh:
+    safety.private_dir(os.path.dirname(os.path.abspath(out)) or ".")
+    with safety.private_open(out, "w") as fh:
         fh.write(md)
     print("Markdown:", out)
     title = item.get("title") or a.template.replace("-", " ").title()
     doc_type = "%s · %s" % (item["stage"], item["type"])
     stem = os.path.splitext(out)[0]
     if not a.no_html:
-        with open(stem + ".html", "w", encoding="utf-8") as fh:
+        with safety.private_open(stem + ".html", "w") as fh:
             fh.write(build_html(md, brand, title, doc_type, theme))
         print("HTML:", stem + ".html")
     if a.pdf or a.docx:

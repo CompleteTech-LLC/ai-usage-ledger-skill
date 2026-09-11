@@ -10,6 +10,7 @@ Runs on Python 3.8+ with stdlib only, so the same file works on Windows and
 inside WSL (run natively there to avoid the slow 9p bridge).
 """
 import argparse
+import contextlib
 import csv
 import glob
 import json
@@ -60,6 +61,54 @@ def check_generic_root(path):
     if (parts[-1] if parts else "") in _FALLBACK_BROAD_DIRS:
         raise SystemExit("generic root %r is a broad directory; point it at the tool's own directory below it" % p)
     return p
+
+
+
+def _private_dir(path):
+    """Create or tighten an output directory (0700 on POSIX). Uses safety.py when it sits beside us, stdlib otherwise."""
+    if _safety is not None:
+        return _safety.private_dir(path)
+    os.makedirs(path, exist_ok=True)
+    if os.name != "nt":
+        try:
+            if os.stat(path).st_mode & 0o077:
+                os.chmod(path, 0o700)
+        except OSError:
+            pass
+    return path
+
+
+def _private_file(path):
+    """Tighten an existing output file to 0600 on POSIX; no-op on Windows."""
+    if _safety is not None:
+        return _safety.private_file(path)
+    if os.name != "nt" and path and os.path.exists(path):
+        try:
+            if os.stat(path).st_mode & 0o077:
+                os.chmod(path, 0o600)
+        except OSError:
+            pass
+    return path
+
+
+@contextlib.contextmanager
+def _private_open(path, mode="w", encoding="utf-8", newline=None):
+    """Open a sensitive scan/report file as 0600 from creation; its directory is made 0700 first.
+
+    The mode passed to os.open only applies at creation, so an existing file opened with truncation is
+    tightened afterwards by _private_file()."""
+    _private_dir(os.path.dirname(os.path.abspath(path)) or ".")
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if "a" in mode else os.O_TRUNC)
+    fd = os.open(path, flags, 0o600)
+    try:
+        if "b" in mode:
+            fh = os.fdopen(fd, "wb")
+        else:
+            fh = os.fdopen(fd, "w", encoding=encoding, newline=newline)
+        with fh:
+            yield fh
+    finally:
+        _private_file(path)
 
 
 class _NullWriter:
@@ -1147,7 +1196,7 @@ def _generic_specs(specs):
 
 def cmd_scan(a):
     generic = _generic_specs(a.generic_root)  # refuses a home, drive root or broad directory before anything is opened or written
-    os.makedirs(a.out_dir, exist_ok=True)
+    _private_dir(a.out_dir)
     stats = Stats()
     session_meta = []
     seen = set()
@@ -1157,7 +1206,7 @@ def cmd_scan(a):
     pr_path = os.path.join(a.out_dir, "prompts.%s.jsonl" % a.host)
     if not capture and os.path.exists(pr_path):  # a file left by an earlier opt-in run must not be ingested as this run's
         os.remove(pr_path)
-    with open(ev_path, "w", encoding="utf-8") as out, (open(pr_path, "w", encoding="utf-8") if capture else _NullWriter()) as outp:
+    with _private_open(ev_path, "w") as out, (_private_open(pr_path, "w") if capture else _NullWriter()) as outp:
         for root in a.claude_root or []:
             n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_claude(root, a.host, out, stats, seen, session_meta)
@@ -1224,10 +1273,10 @@ def cmd_scan(a):
             skipped = scan_generic(root, a.host, out, stats, session_meta, outp, tool)
             inventory.append({"tool": tool, "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0,
                               "credential_files_skipped": skipped, "note": "generic usage sniffer; %d credential-like files skipped; verify on a sample" % skipped})
-    with open(os.path.join(a.out_dir, "sessions.%s.jsonl" % a.host), "w", encoding="utf-8") as f:
+    with _private_open(os.path.join(a.out_dir, "sessions.%s.jsonl" % a.host), "w") as f:
         for s in session_meta:
             f.write(json.dumps(s) + "\n")
-    with open(os.path.join(a.out_dir, "inventory.%s.json" % a.host), "w", encoding="utf-8") as f:
+    with _private_open(os.path.join(a.out_dir, "inventory.%s.json" % a.host), "w") as f:
         json.dump({"host": a.host, "roots": inventory, "files": stats.files, "bytes": stats.bytes, "lines": stats.lines,
                    "events": stats.events, "json_errors": stats.errors, "codex_replay_skipped": stats.skipped_replay,
                    "dedup_skipped": stats.dedup, "prompts_captured": capture, "seconds": round(time.time() - stats.t0, 1)}, f, indent=2)
@@ -1350,19 +1399,19 @@ def external_sort_csv(src, dst, header_line, chunk_rows=400000):
                 if len(buf) >= chunk_rows:
                     buf.sort(key=lambda ln: ln.split(",", 1)[0])
                     p = os.path.join(tmpdir, "chunk-%d.csv" % len(chunks))
-                    with open(p, "w", encoding="utf-8", newline="") as out:
+                    with _private_open(p, "w", newline="") as out:
                         out.writelines(buf)
                     chunks.append(p)
                     buf = []
             if buf or not chunks:
                 buf.sort(key=lambda ln: ln.split(",", 1)[0])
                 p = os.path.join(tmpdir, "chunk-%d.csv" % len(chunks))
-                with open(p, "w", encoding="utf-8", newline="") as out:
+                with _private_open(p, "w", newline="") as out:
                     out.writelines(buf)
                 chunks.append(p)
         handles = [open(p, "r", encoding="utf-8", newline="") for p in chunks]
         try:
-            with open(dst, "w", encoding="utf-8", newline="") as out:
+            with _private_open(dst, "w", newline="") as out:
                 out.write(header_line)
                 for line in heapq.merge(*handles, key=lambda ln: ln.split(",", 1)[0]):
                     out.write(line)
@@ -1382,7 +1431,7 @@ def external_sort_csv(src, dst, header_line, chunk_rows=400000):
 
 
 def cmd_report(a):
-    os.makedirs(a.out_dir, exist_ok=True)
+    _private_dir(a.out_dir)
     cols = ["ts", "date", "tool", "host", "session", "kind", "model", "effort", "entrypoint", "version", "cwd",
             "input_uncached", "cache_read", "cache_write", "cache_write_5m", "cache_write_1h", "output", "reasoning", "total",
             "api_cost_usd", "cost_if_uncached_usd", "cache_savings_usd", "priced_as", "cost_usd", "plan", "account", "billing", "account_confidence", "request_id", "src"]
@@ -1413,7 +1462,7 @@ def cmd_report(a):
     AC = load_accounts(a.accounts)
     n_events = 0
     unsorted = os.path.join(a.out_dir, "all_events.unsorted.csv")
-    with open(unsorted, "w", newline="", encoding="utf-8") as f:
+    with _private_open(unsorted, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         for pat in a.events:
             for p in sorted(glob.glob(pat)):
@@ -1463,7 +1512,7 @@ def cmd_report(a):
             row["sessions"] = len(r["sessions"])
             rows.append(row)
         rows.sort(key=lambda r: tuple(str(r[k]) for k in keynames))
-        with open(os.path.join(a.out_dir, name + ".csv"), "w", newline="", encoding="utf-8") as f:
+        with _private_open(os.path.join(a.out_dir, name + ".csv"), "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=list(keynames) + ["calls", "sessions"] + list(NUM) + list(COST))
             w.writeheader()
             w.writerows(rows)
@@ -1486,7 +1535,7 @@ def cmd_report(a):
                         pass
     sess_tok = {(r["tool"], r["host"], r["session"]): r for r in by_sess}
     scols = ["tool", "host", "session", "kind", "first_ts", "last_ts", "model", "originator", "version", "cwd", "title", "user_msgs", "tool_calls", "calls", "total_tokens", "output_tokens", "sqlite_tokens_used", "bytes", "archived", "parent", "file"]
-    with open(os.path.join(a.out_dir, "all_sessions.csv"), "w", newline="", encoding="utf-8") as f:
+    with _private_open(os.path.join(a.out_dir, "all_sessions.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=scols, extrasaction="ignore")
         w.writeheader()
         for s in sorted(sessions, key=lambda s: s.get("first_ts") or ""):
@@ -1507,10 +1556,10 @@ def cmd_report(a):
                     except Exception:
                         pass
     prompts.sort(key=lambda p: p.get("ts") or "")
-    with open(os.path.join(a.out_dir, "all_prompts.jsonl"), "w", encoding="utf-8") as f:
+    with _private_open(os.path.join(a.out_dir, "all_prompts.jsonl"), "w") as f:
         for p in prompts:
             f.write(json.dumps(p) + "\n")
-    with open(os.path.join(a.out_dir, "all_prompts.csv"), "w", newline="", encoding="utf-8") as f:
+    with _private_open(os.path.join(a.out_dir, "all_prompts.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["ts", "tool", "host", "session", "cwd", "text"], extrasaction="ignore")
         w.writeheader()
         w.writerows(prompts)
@@ -1537,7 +1586,7 @@ def cmd_report(a):
                              "api_equivalent_usd": round(api, 2), "api_if_uncached_usd": round(nocache, 2),
                              "savings_vs_api_usd": round(api - sub["monthly_usd"], 2),
                              "api_to_sub_ratio": round(api / sub["monthly_usd"], 2) if sub["monthly_usd"] else None})
-    with open(os.path.join(a.out_dir, "subscription_vs_api.csv"), "w", newline="", encoding="utf-8") as f:
+    with _private_open(os.path.join(a.out_dir, "subscription_vs_api.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["month", "tool", "plan", "subscription_usd", "calls", "api_equivalent_usd", "api_if_uncached_usd", "savings_vs_api_usd", "api_to_sub_ratio"])
         w.writeheader()
         w.writerows(sub_rows)
@@ -1589,7 +1638,7 @@ def cmd_report(a):
         t["savings_vs_api_usd"] = round(t["api_equivalent_usd"] - t["subscription_usd"], 2)
     # usage-based (real spend) by month and account: re-derive from by_billing_month for the total and by_plan for the codex business calls
     ub_month = [r for r in by_billing_month if r["billing"] == "usage-based" and r["month"] != "?"]
-    with open(os.path.join(a.out_dir, "subscription_vs_api_by_account.csv"), "w", newline="", encoding="utf-8") as f:
+    with _private_open(os.path.join(a.out_dir, "subscription_vs_api_by_account.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["month", "account", "label", "plan", "billing", "subscription_usd", "calls", "total", "api_equivalent_usd", "api_if_uncached_usd", "api_to_sub_ratio"], extrasaction="ignore")
         w.writeheader()
         w.writerows(sorted(acct_rows, key=lambda r: (r["account"], r["month"])))
@@ -1709,9 +1758,9 @@ def cmd_report(a):
             inv["host"], fmt(inv["files"]), inv["bytes"] / 1e9, fmt(inv["lines"]), fmt(inv["events"]), fmt(inv["json_errors"]),
             fmt(inv["codex_replay_skipped"]), fmt(inv["dedup_skipped"]), inv["seconds"]))
     L.append("")
-    with open(os.path.join(a.out_dir, "SUMMARY.md"), "w", encoding="utf-8") as f:
+    with _private_open(os.path.join(a.out_dir, "SUMMARY.md"), "w") as f:
         f.write("\n".join(L))
-    with open(os.path.join(a.out_dir, "summary.json"), "w", encoding="utf-8") as f:
+    with _private_open(os.path.join(a.out_dir, "summary.json"), "w") as f:
         json.dump({
             "generated": datetime.now(timezone.utc).isoformat(), "events": n_events, "sessions": len(by_sess), "prompts": len(prompts),
             "total": tot, "by_tool": by_tool, "by_tool_host": by_host, "by_model": by_model, "by_month_tool": by_month,
