@@ -1318,11 +1318,14 @@ def price_event(e, pricing):
         if fb:
             row = models.get(fb["model"])
             priced_as = fb["model"]
-            assumed = fb.get("note")
+            reason = "No model recorded" if model == "?" else "No price for %s" % model
+            assumed = "%s; using %s" % (reason, priced_as)
+            if fb.get("note"):
+                assumed += ". " + fb["note"]
         if row is None:
             return 0.0, 0.0, None, "no price for %s" % model
     if row.get("assumed"):
-        assumed = row["assumed"]
+        assumed = "; ".join(x for x in (assumed, row["assumed"]) if x)
     if row.get("use_logged_cost"):
         c = float(e.get("cost_usd") or 0)
         return c, c, priced_as, assumed
@@ -1333,6 +1336,13 @@ def price_event(e, pricing):
     if cw5 is None:
         cw5 = e.get("cache_write") or 0
     out = e.get("output") or 0
+    # Context premiums depend on the complete prompt, including cached tokens.
+    # Existing snapshots without a tier retain their flat-rate behavior.
+    tier = row.get("long_context")
+    if tier and iu + cr + cw5 + cw1 > tier["input_tokens_gt"]:
+        row = dict(row, **tier)
+        if tier.get("assumed"):
+            assumed = "; ".join(x for x in (assumed, tier["assumed"]) if x)
     cost = (iu * row["input"] + cr * row["cache_read"] + cw5 * row["cache_write_5m"] + cw1 * row["cache_write_1h"] + out * row["output"]) / 1e6
     nocache = ((iu + cr + cw5 + cw1) * row["input"] + out * row["output"]) / 1e6
     return cost, nocache, priced_as, assumed

@@ -1,5 +1,5 @@
 {
-  "_comment": "USD per million tokens. Sources: platform.claude.com/docs/en/about-claude/pricing and developers.openai.com/api/docs/pricing, fetched 2026-09-07. Edit freely; the report re-prices from this file. cache_write_5m / cache_write_1h are Anthropic cache-write rates; OpenAI has no cache-write charge. 'assumed' rows have no published price and are priced at the nearest published sibling.",
+  "_comment": "USD per million tokens. Historical snapshot from platform.claude.com/docs/en/about-claude/pricing and developers.openai.com/api/docs/pricing, fetched 2026-09-07; only rows with verified_at carry a later verification. Edit freely; the report re-prices from this file. Rows with service_tier=standard use standard API list rates, excluding speed-tier and regional premiums. cache_write_5m / cache_write_1h distinguish Anthropic cache durations; verified GPT rows use the same API cache-write rate for both fields. Optional long_context rates apply when total input tokens strictly exceed input_tokens_gt. 'assumed' rows have no published price and are priced at the stated sibling.",
   "models": {
     "claude-fable-5-1": {
       "input": 10.0,
@@ -50,6 +50,16 @@
       "cache_write_1h": 10.0,
       "output": 25.0
     },
+    "claude-sonnet-5-5": {
+      "input": 2.0,
+      "cache_read": 0.2,
+      "cache_write_5m": 2.5,
+      "cache_write_1h": 4.0,
+      "output": 10.0,
+      "service_tier": "standard",
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verified_at": "2026-10-03"
+    },
     "claude-sonnet-5": {
       "input": 2.0,
       "cache_read": 0.2,
@@ -88,9 +98,74 @@
     "gpt-6-astra": {
       "input": 10.0,
       "cache_read": 1.0,
-      "cache_write_5m": 0,
-      "cache_write_1h": 0,
-      "output": 50.0
+      "cache_write_5m": 12.5,
+      "cache_write_1h": 12.5,
+      "output": 50.0,
+      "service_tier": "standard",
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "verified_at": "2026-10-03",
+      "long_context": {
+        "input_tokens_gt": 272000,
+        "input": 20.0,
+        "cache_read": 2.0,
+        "cache_write_5m": 25.0,
+        "cache_write_1h": 25.0,
+        "output": 75.0
+      }
+    },
+    "gpt-6.1-sol": {
+      "input": 2.0,
+      "cache_read": 0.1,
+      "cache_write_5m": 2.5,
+      "cache_write_1h": 2.5,
+      "output": 10.0,
+      "service_tier": "standard",
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "verified_at": "2026-10-03",
+      "long_context": {
+        "input_tokens_gt": 272000,
+        "input": 4.0,
+        "cache_read": 0.2,
+        "cache_write_5m": 5.0,
+        "cache_write_1h": 5.0,
+        "output": 15.0
+      }
+    },
+    "gpt-6-sol": {
+      "input": 2.0,
+      "cache_read": 0.2,
+      "cache_write_5m": 2.5,
+      "cache_write_1h": 2.5,
+      "output": 10.0,
+      "service_tier": "standard",
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "verified_at": "2026-10-03",
+      "long_context": {
+        "input_tokens_gt": 272000,
+        "input": 4.0,
+        "cache_read": 0.4,
+        "cache_write_5m": 5.0,
+        "cache_write_1h": 5.0,
+        "output": 15.0
+      }
+    },
+    "gpt-6-luna": {
+      "input": 0.1,
+      "cache_read": 0.01,
+      "cache_write_5m": 0.125,
+      "cache_write_1h": 0.125,
+      "output": 0.5,
+      "service_tier": "standard",
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "verified_at": "2026-10-03",
+      "long_context": {
+        "input_tokens_gt": 272000,
+        "input": 0.2,
+        "cache_read": 0.02,
+        "cache_write_5m": 0.25,
+        "cache_write_1h": 0.25,
+        "output": 0.75
+      }
     },
     "gpt-5.6-sol": {
       "input": 4.0,
@@ -239,11 +314,11 @@
   "fallback_by_tool": {
     "codex": {
       "model": "gpt-5.6-sol",
-      "note": "Codex threads with no model recorded are priced at gpt-5.6-sol"
+      "note": "Codex threads with missing or unpriced model names are priced at gpt-5.6-sol"
     },
     "claude-code": {
       "model": "claude-opus-5",
-      "note": "Claude transcripts with no model recorded are priced at Opus 5"
+      "note": "Claude transcripts with missing or unpriced model names are priced at Opus 5"
     }
   },
   "subscriptions": {

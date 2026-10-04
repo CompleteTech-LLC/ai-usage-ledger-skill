@@ -13,6 +13,7 @@ ledger.py - the one entry point people and agents use day to day.
     python3 scripts/ledger.py archive status|list|grep|restore # the raw logs themselves (archive.raw_logs=y)
     python3 scripts/ledger.py query --presets                 # detailed questions over the store and the archive
     python3 scripts/ledger.py query by-project --since 2026-08-01 --tool codex
+    python3 scripts/ledger.py report --since today --tz America/New_York # scoped HTML and dollar metrics
     python3 scripts/ledger.py publish-check <dir> # identity scan before anything leaves the machine
     python3 scripts/ledger.py reinit          # fresh onboarding; the old store is kept aside with a timestamp
 
@@ -886,6 +887,11 @@ def do_doc(args):
     return r.returncode
 
 
+def do_report(args):
+    """Render a bounded report from recorded events without refreshing sources."""
+    return subprocess.run([sys.executable, os.path.join(HERE, "scoped_report.py")] + args.rest).returncode
+
+
 def do_reinit(args):
     cfg = load_config()
     if cfg and os.path.exists(cfg["store"]["path"]):
@@ -946,6 +952,9 @@ def main():
     dc = sub.add_parser("doc", help="render a ledger document; all arguments pass through to render_ledger_doc.py")
     dc.add_argument("rest", nargs=argparse.REMAINDER)
     dc.set_defaults(fn=do_doc)
+    rp = sub.add_parser("report", help="render usage and dollar metrics for an exact time window from the store")
+    rp.add_argument("rest", nargs=argparse.REMAINDER)
+    rp.set_defaults(fn=do_report)
     ri = sub.add_parser("reinit", help="fresh onboarding; the previous store is kept with a timestamp")
     ri.add_argument("--yes", action="store_true")
     ri.add_argument("--brand-preset")
@@ -955,6 +964,8 @@ def main():
         sys.exit(subprocess.run([sys.executable, os.path.join(HERE, "render_ledger_doc.py")] + sys.argv[2:]).returncode)
     if len(sys.argv) > 1 and sys.argv[1] == "query":
         sys.exit(do_query(argparse.Namespace(rest=sys.argv[2:])))
+    if len(sys.argv) > 1 and sys.argv[1] == "report":
+        sys.exit(do_report(argparse.Namespace(rest=sys.argv[2:])))
     if len(sys.argv) > 1 and sys.argv[1] == "archive":
         sys.exit(do_archive(argparse.Namespace(rest=sys.argv[2:])))
     a = ap.parse_args()

@@ -107,9 +107,15 @@ def validate_mermaid(skip: bool) -> None:
 
 def smoke_pipeline() -> None:
     for script in ("run_pipeline.py", "compile_ai_logs.py", "analyze_events.py", "build_report.py", "ledger.py", "ledger_store.py", "detect_hosts.py",
-                   "anonymize.py", "schedule.py", "render_ledger_doc.py", "render_pdf.py", "ledger_archive.py", "ledger_query.py"):
+                   "anonymize.py", "schedule.py", "render_ledger_doc.py", "render_pdf.py", "ledger_archive.py", "ledger_query.py", "scoped_report.py"):
         run([sys.executable, str(ROOT / "scripts" / script), "--help"])
     print("pipeline smoke ok")
+
+
+def run_report_tests() -> None:
+    for pattern in ("test_pricing.py", "test_scoped_report.py"):
+        run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", pattern, "-v"])
+    print("pricing and scoped report suites ok")
 
 
 def run_fixture_suite() -> None:
@@ -278,6 +284,7 @@ def main() -> int:
     parse_structured_files()
     validate_mermaid(args.skip_mermaid)
     smoke_pipeline()
+    run_report_tests()
     if not args.skip_fixtures:
         run_fixture_suite()
     validate_self_contained_pages()
