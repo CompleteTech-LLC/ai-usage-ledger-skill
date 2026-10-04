@@ -17,7 +17,7 @@ The ledger is the evidence member of the CompleteTech LLC skill family. It suppl
 | Field | Value |
 |---|---|
 | Skill key | `ai-usage-ledger` |
-| Existing version | `1.5.12` (unchanged by package alignment) |
+| Version | `1.6.0` |
 | Core runtime | `python3`; Python standard library |
 | Optional document libraries | See [requirements.txt](requirements.txt) for PDF, DOCX and preview dependencies |
 | Repository | `CompleteTech-LLC/ai-usage-ledger-skill` |
@@ -37,6 +37,24 @@ python scripts/run_pipeline.py --manifest examples/manifest.fixtures.json
 The fixture test should print `ALL OK`. The example manifest writes under `tests/out/pipeline`; inspect the artifact paths printed by the pipeline. These commands do not initialize your personal ledger, select remote hosts or install schedules. Re-running can replace earlier test outputs.
 
 For real use, first read the disclosure in [SKILL.md](SKILL.md), confirm the source and retention scope, then follow its `python scripts/ledger.py init`, `run` and `status` workflow. Do not substitute an unattended `init --yes` for informed operator choices.
+
+## Report usage since midnight
+
+For an initialized ledger, create a report from the stored events in your timezone:
+
+```bash
+python scripts/ledger.py report --since today --tz America/New_York
+```
+
+The HTML report shows the exact time window, latest recorded activity, tokens, calls, models, API-equivalent cost and cache savings using the selected price snapshot. Its accompanying CSV and JSON contain only events and totals from that window. It reads the existing store without rescanning sources, changing saved prices or registering schedules.
+
+To use a reviewed price snapshot for this report:
+
+```bash
+python scripts/ledger.py report --since 2026-10-03 --until 2026-10-03T16:49:12.602-04:00 --tz America/New_York --pricing templates/pricing.json
+```
+
+The bundled snapshot includes explicit Sol 6.1, Sol, Luna and Sonnet 5.5 rates, with sources and verification dates on the updated rows. Older saved snapshots may still price these models through fallbacks. See [scoped reports](references/scoped-reports.md) for boundaries, freshness, artifact paths and pricing limitations.
 
 ## Workflow Diagram
 

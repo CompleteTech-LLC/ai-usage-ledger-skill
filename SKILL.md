@@ -2,7 +2,7 @@
 name: ai-usage-ledger
 description: >-
   Compile every locally recorded AI coding-agent model call (Claude Code, Codex CLI/Desktop, GitHub Copilot CLI, Gemini CLI, opencode, OpenClaw, Cline/Roo/Kilo, aider, Kimi Code, Mistral Vibe, Continue, pi, Codebuff and any JSON-logging tool) across the operator's own profile and, when enabled, other drives, user profiles, WSL distros and named SSH hosts into one append-only, de-duplicated ledger stored as SQLite, JSON or CSV; price it at list API rates; split it by subscription account and billing plan; validate it against the tools' own counters; and render a branded light/dark dashboard plus a research-grade study package. Onboards once (branding, theme, storage backend, scheduled refresh, anonymised publication copy; hosts and accounts auto-detected per OS), remembers the preferences, refreshes with one command or on a schedule, renders fifteen ledger documents (statements, memos, briefs, billing evidence) as Markdown, HTML, PDF and DOCX, can anonymise everything for publication, optionally archives the raw log files themselves so they outlive the tools' retention, and answers detailed questions (per day, project, account, model or session, and inside prompt text or the archived logs when those opt-ins are on) through a query layer over the accumulated store. Disclosure: this skill reads agent transcripts and tool databases on this machine and on hosts the operator names, keeps a durable local ledger under ~/.ai-usage-ledger and the chosen working directory, and captures prompt text or credential-derived account claims only when the operator opts in. Use when asked to "find all my AI logs", "how many tokens did I use", "what would this have cost on the API", "compare my subscriptions", "usage by account", "cache savings", "set up my usage ledger", "monthly usage statement", "publish my usage anonymously", or to refresh an existing ledger.
-version: 1.5.12
+version: 1.6.0
 metadata:
   openclaw:
     skillKey: ai-usage-ledger
@@ -66,6 +66,7 @@ Relay this table to the operator, in chat or on the terminal, before the first o
 | 5 | Deliver the dashboard, the study package and `all_events.csv` (or `ledger.py export`), with exclusions and low-confidence rules stated. For a statement, memo or brief, pick a template from `references/ledger-document-catalog.md` and render it with `python3 scripts/ledger.py doc --template <id> --var prepared_for=... [--pdf --docx]`. For anything leaving the organisation, use the anonymised copy (`ledger.py run --anonymize`, then `doc --anonymize`) and check the outputs for names before publishing. |
 | 6 | To start over (new brand, different backend, changed hosts) run `python3 scripts/ledger.py reinit`; the previous store is kept beside the new one with a timestamp. The manual route (`run_pipeline.py` with a hand-written manifest) still works for one-off or unattended use. |
 | 7 | When the operator asks a specific question ("how many tokens on Tuesday", "which project cost the most in August", "when did I first use gpt-6", "what did I ask about rate limits"), answer it from the store with `python3 scripts/ledger.py query <preset> [filters]` per the Answering Detailed Questions table, not from the summary tables; go into the archived raw logs (`query logs`) when the answer is in the transcript rather than the counts. |
+| 8 | For a report output covering "since midnight" or another exact interval, use `python3 scripts/ledger.py report --since today --tz <operator-zone>`. It filters stored events before pricing and rendering, shows the cutoff and latest recorded activity, and writes a separate HTML/data package. Use `--pricing <reviewed-snapshot>` for a report-only price override. See [scoped reports](references/scoped-reports.md) for timestamp boundaries, pricing provenance and freshness. |
 
 | Required Fact | Examples |
 |---|---|
@@ -118,6 +119,7 @@ Relay this table to the operator, in chat or on the terminal, before the first o
 | `templates/` | Manifest, pricing sheet, account and report-config examples. |
 | `examples/` | A workstation manifest and the CompleteTech brand preset. |
 | `scripts/ledger.py` | Daily entry point: `init` (onboarding), `run` (scan, append, rebuild), `status`, `export`, `reinit`. |
+| `scripts/scoped_report.py` | Exact-interval HTML report, token and dollar breakdowns, pricing evidence and event export; reached through `ledger.py report`, with no source scan or configuration changes. |
 | `scripts/detect_hosts.py` | OS-aware discovery of harness roots, profiles, drives, WSL distros and credential claims; prints or emits manifest hosts and an accounts draft. |
 | `scripts/ledger_store.py` | Append-only store with SQLite, JSON (JSONL) and CSV backends, stable event ids, prefs and run history, exports. |
 | `scripts/run_pipeline.py` | One command: scan every host, merge, analyse, render, zip (used by `ledger.py`, also usable alone). |
@@ -238,6 +240,7 @@ Relay this table to the operator, in chat or on the terminal, before the first o
 | Question shape | Command |
 |---|---|
 | How much on a day / week / month, optionally one tool or host | `query by-day --since D --until D [--tool t] [--host h]`, `by-week`, `by-month`, `totals` |
+| Report output since local midnight or between exact timestamps | `report --since today --tz America/New_York`, or `report --since <date-or-timestamp> --until <date-or-timestamp> --tz <zone> [--pricing <snapshot>]`; [scope and pricing details](references/scoped-reports.md) |
 | Which projects, models, accounts, plans, entry points, effort levels, client versions | `query by-project`, `by-model`, `by-model-month`, `by-account`, `by-account-month`, `by-plan`, `by-entrypoint`, `by-effort`, `by-version` |
 | Working pattern | `query by-hour`, `by-weekday`, `by-kind` (main vs sub-agents) |
 | Biggest or specific sessions and calls | `query sessions [--project p]`, `session --session <id>`, `biggest-calls`, `calls --since D --until D --limit N` |
@@ -248,6 +251,10 @@ Relay this table to the operator, in chat or on the terminal, before the first o
 | Output for a document or a spreadsheet | add `--format csv|json|jsonl` |
 
 Accounts in `query` come from the same `accounts.json` rules the report uses (`acct()` / `bill()` SQL functions), so per-account answers agree with the dashboard. JSON and CSV stores are loaded into an in-memory SQLite database, so every preset works on every backend.
+
+The `query --since/--until` flags filter stored calendar-date fields; they do not convert an intraday cutoff into the operator's timezone. Use `report` for timezone-aware report output. Reuse an existing fresh store when sufficient; if a refresh is needed, finish it within the approved source scope, then build the bounded report. A historical scan does not expand the report's time range.
+
+Saved price files are persistent operator configuration and can lag the bundled template. Check each used model's exact row and verification date; missing models must remain marked as assumed or unpriced. A report-only `--pricing templates/pricing.json` uses the bundled snapshot without replacing saved prices. Keep API-equivalent estimates separate from actual charges, including any service-tier premiums or unrecorded usage categories.
 
 ## Ledger Documents
 
