@@ -2,7 +2,12 @@
 
 # AI Usage Ledger Skill
 
-<p align="center"><img src="assets/logo.png" alt="CompleteTech LLC logo" width="260"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <img src="assets/logo.png" alt="CompleteTech LLC logo" width="260">
+  </picture>
+</p>
 
 Compile recorded AI coding-agent usage into an append-only, de-duplicated, priced and account-attributed ledger, then render dashboards, study packages and ledger documents. Preserve observed evidence, estimates, exclusions and attribution uncertainty separately.
 
