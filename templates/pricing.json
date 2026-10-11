@@ -15,6 +15,16 @@
       "cache_write_1h": 20.0,
       "output": 50.0
     },
+    "claude-opus-5-5": {
+      "input": 4.0,
+      "cache_read": 0.2,
+      "cache_write_5m": 5.0,
+      "cache_write_1h": 8.0,
+      "output": 20.0,
+      "service_tier": "standard",
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verified_at": "2026-10-11"
+    },
     "claude-opus-5": {
       "input": 5.0,
       "cache_read": 0.5,
@@ -52,13 +62,13 @@
     },
     "claude-sonnet-5-5": {
       "input": 2.0,
-      "cache_read": 0.2,
+      "cache_read": 0.1,
       "cache_write_5m": 2.5,
       "cache_write_1h": 4.0,
       "output": 10.0,
       "service_tier": "standard",
       "source": "https://platform.claude.com/docs/en/about-claude/pricing",
-      "verified_at": "2026-10-03"
+      "verified_at": "2026-10-11"
     },
     "claude-sonnet-5": {
       "input": 2.0,
