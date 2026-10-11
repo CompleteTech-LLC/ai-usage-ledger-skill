@@ -29,7 +29,8 @@ class PricingTests(unittest.TestCase):
             ("gpt-6.1-sol", "codex", 0.0697, 0.07),
             ("gpt-6-sol", "codex", 0.0699, 0.07),
             ("gpt-6-luna", "codex", 0.003495, 0.0035),
-            ("claude-sonnet-5-5", "claude-code", 0.0759, 0.07),
+            ("claude-opus-5-5", "claude-code", 0.1514, 0.14),
+            ("claude-sonnet-5-5", "claude-code", 0.0757, 0.07),
         )
         for model, tool, expected_cost, expected_nocache in examples:
             with self.subTest(model=model):
@@ -43,7 +44,8 @@ class PricingTests(unittest.TestCase):
                 self.assertIsNone(assumed)
                 row = self.pricing["models"][model]
                 self.assertEqual(row["service_tier"], "standard")
-                self.assertEqual(row["verified_at"], "2026-10-03")
+                verified_at = "2026-10-11" if tool == "claude-code" else "2026-10-03"
+                self.assertEqual(row["verified_at"], verified_at)
                 source = ("https://platform.claude.com/docs/en/about-claude/pricing"
                           if tool == "claude-code" else "https://developers.openai.com/api/docs/pricing")
                 self.assertEqual(row["source"], source)
@@ -54,6 +56,21 @@ class PricingTests(unittest.TestCase):
         self.assertAlmostEqual(nocache, 0.2)
         self.assertEqual(priced_as, "gpt-6.1-sol")
         self.assertIsNone(assumed)
+
+    def test_claude_55_cache_heavy_calls_use_exact_model_rates(self):
+        for model, expected_cost, expected_nocache in (
+            ("claude-opus-5-5", 0.2, 4.0),
+            ("claude-sonnet-5-5", 0.1, 2.0),
+        ):
+            for identity in (model, "anthropic/" + model):
+                with self.subTest(model=identity):
+                    cost, nocache, priced_as, assumed = self.price(
+                        identity, "claude-code", cache_read=1000000,
+                    )
+                    self.assertAlmostEqual(cost, expected_cost)
+                    self.assertAlmostEqual(nocache, expected_nocache)
+                    self.assertEqual(priced_as, model)
+                    self.assertIsNone(assumed)
 
     def test_gpt_cache_writes_use_api_rates_for_both_duration_fields(self):
         for field in ("cache_write_5m", "cache_write_1h", "cache_write"):
