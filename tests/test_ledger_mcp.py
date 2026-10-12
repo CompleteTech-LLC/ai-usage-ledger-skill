@@ -25,7 +25,8 @@ class MCPTests(MuseTests):
                               "params": {"name": name, "arguments": {} if arguments is None else arguments}})["result"]
 
     def test_mcp_discovery_and_all_report_invocations(self):
-        self.write(fixture()); muse_usage.scan(self.config)
+        self.write(fixture())
+        muse_usage.scan(self.config)
         server = self.connected()
         discovery = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         names = {tool["name"] for tool in discovery["result"]["tools"]}
@@ -37,16 +38,20 @@ class MCPTests(MuseTests):
         self.write(fixture())
         server = self.connected()
         self.assertTrue(self.call(server, "ledger_scan_sources")["isError"])
-        self.config["muse_mesh"]["allow_scan"] = True; self.save_config()
+        self.config["muse_mesh"]["allow_scan"] = True
+        self.save_config()
         self.assertFalse(self.call(server, "ledger_scan_sources")["isError"])
         self.assertTrue(self.call(server, "ledger_scan_sources", {"path": "/etc"})["isError"])
-        self.config["muse_mesh"]["collection_consent"] = "revoked"; self.save_config()
+        self.config["muse_mesh"]["collection_consent"] = "revoked"
+        self.save_config()
         self.assertTrue(self.call(server, "ledger_scan_sources")["isError"])
 
     def test_mcp_reporting_revocation_is_immediate_and_not_model_overridable(self):
-        self.write(fixture()); muse_usage.scan(self.config)
+        self.write(fixture())
+        muse_usage.scan(self.config)
         server = self.connected()
-        self.config["muse_mesh"]["reporting_enabled"] = False; self.save_config()
+        self.config["muse_mesh"]["reporting_enabled"] = False
+        self.save_config()
         self.assertTrue(self.call(server, "ledger_usage_summary")["isError"])
         self.assertTrue(self.call(server, "ledger_usage_summary", {"consent": "yes"})["isError"])
         response = server.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
@@ -72,7 +77,8 @@ class MCPTests(MuseTests):
         self.assertEqual(status, 1)
 
     def test_mcp_stdio_subprocess_roundtrip_without_optional_mcp_package(self):
-        self.write(fixture()); muse_usage.scan(self.config)
+        self.write(fixture())
+        muse_usage.scan(self.config)
         messages = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}},
                     {"jsonrpc": "2.0", "method": "notifications/initialized"},
                     {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
