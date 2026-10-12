@@ -1,0 +1,37 @@
+name: Goose native checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native usage (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Package contract regression tests
+        run: python -m unittest discover -s tests -p 'test_package_*.py' -v
+      - name: Capture exact tracked source for reproducing validation
+        if: always() && runner.os == 'Linux'
+        run: git archive --format=zip --output=goose-validation-source.zip HEAD
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Linux'
+        with:
+          name: goose-validation-source-${{ github.sha }}
+          path: goose-validation-source.zip
+          if-no-files-found: error
+          retention-days: 7
