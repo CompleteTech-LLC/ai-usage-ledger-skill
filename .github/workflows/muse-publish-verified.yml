@@ -1,0 +1,95 @@
+name: Publish verified Muse review branch
+on:
+  push:
+    branches: [work/muse-ledger-baseline-20261012]
+    paths: [.github/workflows/muse-publish-verified.yml]
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: transport
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 4948b232daf24c20669cd82f98d3656ffcb130dd
+          path: delivery
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Preserve public base Git objects for offline verification
+        run: |
+          mkdir -p evidence
+          git -C delivery bundle create ../evidence/ledger-base.bundle HEAD
+      - name: Decode and verify the reviewed source patch
+        run: |
+          python - <<'PY'
+          import base64, hashlib, lzma
+          from pathlib import Path
+          parts = [Path('transport/.muse-transfer') / ('part-%02d.txt' % i) for i in range(1, 7)]
+          encoded = ''.join(p.read_text().strip() for p in parts)
+          assert len(encoded) == 51212, 'Unexpected encoded source length'
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert len(patch) == 151749, 'Unexpected source patch length'
+          digest = hashlib.sha256(patch).hexdigest()
+          assert digest == '3ce666cbc278b641cfa0b6163abb6f5467710cd4aecacced7e4c1d6adbf89020', digest
+          Path('evidence/ledger-implementation.patch').write_bytes(patch)
+          print('Verified source patch SHA256', digest)
+          PY
+      - name: Apply only the authorized integration paths to the current base
+        working-directory: delivery
+        run: |
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = 4948b232daf24c20669cd82f98d3656ffcb130dd
+          git switch -c feat/muse-mesh-usage-mcp-20261012
+          git apply --check ../evidence/ledger-implementation.patch
+          git apply --index ../evidence/ledger-implementation.patch
+          git diff --cached --check
+          python - <<'PY'
+          import hashlib, subprocess
+          from pathlib import Path
+          allowed = {'.github/workflows/muse-integration.yml', 'README.md',
+            'integrations/muse-mesh/.gitattributes', 'integrations/muse-mesh/LICENSE.mu.txt',
+            'integrations/muse-mesh/NOTICE.md', 'integrations/muse-mesh/mu.patch.txt',
+            'integrations/muse-mesh/usage.schema.json', 'references/muse-mesh.md',
+            'scripts/compile_ai_logs.py', 'scripts/ledger_mcp.py', 'scripts/ledger_store.py',
+            'scripts/muse_usage.py', 'scripts/scoped_report.py',
+            'tests/test_ledger_mcp.py', 'tests/test_muse_usage.py'}
+          changed = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          assert changed == allowed, changed ^ allowed
+          assert hashlib.sha256(Path('integrations/muse-mesh/mu.patch.txt').read_bytes()).hexdigest() == 'da5b76b047ad7ccc3cbd369b6de55d6dd587f1317f597cc66a96636197ab0655'
+          print('Validated', len(changed), 'authorized changed paths')
+          PY
+      - name: Verify integration and inherited package contracts before publication
+        working-directory: delivery
+        run: |
+          python -m unittest discover -s tests -p 'test_muse_usage.py' -v
+          python -m unittest discover -s tests -p 'test_ledger_mcp.py' -v
+          python -m unittest discover -s tests -p 'test_package_*.py' -v
+          python scripts/validate_package.py
+          python -m compileall -q scripts tests
+      - name: Commit and push only the new review branch
+        working-directory: delivery
+        run: |
+          test -z "$(git ls-remote origin refs/heads/feat/muse-mesh-usage-mcp-20261012)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat: add opt-in Muse usage collection and consent-scoped MCP reports'
+          git push origin HEAD:refs/heads/feat/muse-mesh-usage-mcp-20261012
+          git rev-parse HEAD > ../evidence/ledger-head.sha
+          git rev-parse HEAD^{tree} > ../evidence/ledger-tree.sha
+          git bundle create ../evidence/ledger-published.bundle HEAD
+          git diff HEAD^ HEAD --stat > ../evidence/published-stat.txt
+          sha256sum ../evidence/*.bundle > ../evidence/bundle-sha256.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: muse-verified-publication
+          path: evidence/
+          retention-days: 1
