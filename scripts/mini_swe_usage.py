@@ -258,7 +258,10 @@ def normalize(snap: dict, host: str, path: Path) -> dict:
     model = snap.get("model") or snap.get("requested_model") or "unknown"
     provider = snap.get("provider") or "unknown"
     if source_id:
-        identity = ("provider", provider, model, source_id)
+        # A routing alias is not the observed provider: independent providers
+        # may return identical response IDs for the same model.
+        identity_provider = snap.get("upstream_provider") or provider
+        identity = ("provider", identity_provider, model, source_id)
         identity_kind = "provider_response_id"
     elif invocation:
         identity = ("invocation", invocation)

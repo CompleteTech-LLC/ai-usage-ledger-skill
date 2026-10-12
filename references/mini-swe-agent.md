@@ -164,7 +164,12 @@ including the pinned Portkey missing-total failure rather than silently relaxing
 
 ## Identity, replay, and reliability boundaries
 
-A response ID is namespaced by provider and observed model. Without one, the
+A response ID is namespaced by the observed upstream provider when available,
+falling back to the configured provider, and by the observed model. The
+reporting `provider` routing label and `upstream_provider` evidence are both
+preserved. Different providers returning the same ID/model must not collapse;
+the same observed provider response reached through different routing labels
+must not be counted twice. Without a response ID, the
 exported invocation UUID is used. These keys survive copies, resumed history,
 repeated scans, and trajectory/export overlap **on the same ledger host identity**.
 Source IDs, invocation/run/agent IDs, and response-vs-configuration model provenance
@@ -180,6 +185,10 @@ The final run configuration is a labeled fallback only when a per-call model is
 unavailable. Legacy trajectories often lack session/run/time metadata; those
 missing values are not invented from file modification times.
 
+Experimental imports from before the observed-provider identity fix should be
+rebuilt from approved source records before using the corrected collector;
+append-only stores do not migrate earlier routing-only identity keys.
+
 The existing append-only stores remain append-only. A scan during an invocation
 can ingest its provisional record; subsequent scans add no duplicate tokens but
 cannot enrich already-ingested status/cost evidence in place. For settled evidence,
@@ -191,7 +200,7 @@ still require consistent host naming under the existing store identity contract.
 ## Verify the result
 
 ```sh
-python -m unittest discover -s tests -p 'test_package_mini_swe.py' -v
+python -m unittest discover -s tests -p 'test_package_mini_swe*.py' -v
 # In a separate test environment with the pinned mini source and its SDKs:
 python -m pytest tests/test_mini_swe_native.py -v
 python scripts/compile_ai_logs.py report \
