@@ -1,4 +1,4 @@
-name: Publish verified Muse review branch
+name: Publish verified Muse review correction
 on:
   push:
     branches: [work/muse-ledger-baseline-20261012]
@@ -14,81 +14,109 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: transport
-          persist-credentials: false
-      - uses: actions/checkout@v4
-        with:
-          ref: 05849f9dd595af420dddb2f4b1cf39b88dbf67b9
-          path: delivery
+          ref: dc71e142ab6d3ab1794e5ac290992a003268ebc9
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Verify and apply the reviewed source patch
+      - name: Apply the narrowly scoped reviewed correction
         run: |
-          mkdir -p evidence
-          git -C delivery bundle create ../evidence/ledger-base.bundle HEAD
-          python - <<'PY'
-          import base64, hashlib, lzma
-          from pathlib import Path
-          encoded = ''.join((Path('transport/.muse-transfer') / ('part-%02d.txt' % i)).read_text().strip() for i in range(1, 7))
-          assert len(encoded) == 51212
-          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
-          assert len(patch) == 151749
-          assert hashlib.sha256(patch).hexdigest() == '3ce666cbc278b641cfa0b6163abb6f5467710cd4aecacced7e4c1d6adbf89020'
-          Path('evidence/ledger-implementation.patch').write_bytes(patch)
-          PY
-          cd delivery
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = 05849f9dd595af420dddb2f4b1cf39b88dbf67b9
-          git switch -c feat/muse-mesh-usage-mcp-20261012
-          git apply --check ../evidence/ledger-implementation.patch
-          git apply --index ../evidence/ledger-implementation.patch
-          git diff --cached --check
+          test "$(git ls-remote origin refs/heads/feat/muse-mesh-usage-mcp-20261012 | cut -f1)" = dc71e142ab6d3ab1794e5ac290992a003268ebc9
+          git switch -c muse-completion-review
           python - <<'PY'
           import hashlib, subprocess
           from pathlib import Path
-          allowed = {'.github/workflows/muse-integration.yml', 'README.md',
-            'integrations/muse-mesh/.gitattributes', 'integrations/muse-mesh/LICENSE.mu.txt',
-            'integrations/muse-mesh/NOTICE.md', 'integrations/muse-mesh/mu.patch.txt',
-            'integrations/muse-mesh/usage.schema.json', 'references/muse-mesh.md',
-            'scripts/compile_ai_logs.py', 'scripts/ledger_mcp.py', 'scripts/ledger_store.py',
-            'scripts/muse_usage.py', 'scripts/scoped_report.py',
-            'tests/test_ledger_mcp.py', 'tests/test_muse_usage.py'}
-          changed = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
-          assert changed == allowed, changed ^ allowed
-          assert hashlib.sha256(Path('integrations/muse-mesh/mu.patch.txt').read_bytes()).hexdigest() == 'da5b76b047ad7ccc3cbd369b6de55d6dd587f1317f597cc66a96636197ab0655'
+          path = Path('scripts/muse_usage.py')
+          text = path.read_text()
+          old = '                                           "charge_source", "estimated_usage")}'
+          new = '                                           "charge_source", "estimated_usage", "status", "usage_pricing_eligible")}'
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, new))
+          path = Path('tests/test_muse_usage.py')
+          text = path.read_text()
+          needle = '    def test_inflight_marker_is_coverage_not_a_zero_cost_event(self):\n'
+          new = '''    def test_completion_status_change_conflicts_after_ingestion(self):
+              for status in ("interrupted", "failed", "cancelled"):
+                  for reverse in (False, True):
+                      with self.subTest(status=status, reverse=reverse):
+                          original = fixture(status=status)
+                          completed = dict(original, invocation_id=str(uuid.uuid4()), status="completed")
+                          first, second = (completed, original) if reverse else (original, completed)
+                          first, second = (mu.normalize(row, self.source) for row in (first, second))
+                          self.assertEqual(first["request_id"], second["request_id"])
+                          self.assertNotEqual(first["evidence_sha256"], second["evidence_sha256"])
+                          self.assertNotEqual(first["usage_pricing_eligible"], second["usage_pricing_eligible"])
+                          path = str(self.root / (status + str(reverse) + ".sqlite"))
+                          store = ledger_store.Store.open("sqlite", path)
+                          try:
+                              self.assertEqual(store.ingest_verified_events([first]), (1, 0))
+                          finally:
+                              store.close()
+                          store = ledger_store.Store.open("sqlite", path)
+                          try:
+                              extra = mu.normalize(fixture(response_id="d" * 64), self.source)
+                              with self.assertRaisesRegex(ValueError, "conflicting"):
+                                  store.ingest_verified_events([extra, second])
+                              rows = list(store.iter_events())
+                              self.assertEqual(len(rows), 1)
+                              self.assertEqual(rows[0]["status"], first["status"])
+                              self.assertEqual(rows[0]["usage_pricing_eligible"], first["usage_pricing_eligible"])
+                              self.assertEqual(store.ingest_verified_events([first]), (0, 1))
+                          finally:
+                              store.close()
+          
+              def test_completion_status_change_conflicts_in_first_batch(self):
+                  for status in ("interrupted", "failed", "cancelled"):
+                      for reverse in (False, True):
+                          with self.subTest(status=status, reverse=reverse):
+                              original = fixture(status=status)
+                              completed = dict(original, invocation_id=str(uuid.uuid4()), status="completed")
+                              records = [completed, original] if reverse else [original, completed]
+                              path = str(self.root / (status + str(reverse) + ".sqlite"))
+                              store = ledger_store.Store.open("sqlite", path)
+                              try:
+                                  with self.assertRaisesRegex(ValueError, "conflicting"):
+                                      store.ingest_verified_events([mu.normalize(row, self.source) for row in records])
+                                  self.assertEqual(list(store.iter_events()), [])
+                              finally:
+                                  store.close()
+          
+          '''
+          # Align the embedded fixture with the checked-in class indentation.
+          lines = new.splitlines(keepends=True)
+          new = lines[0] + ''.join(line[4:] if line.startswith('    ') else line for line in lines[1:])
+          assert text.count(needle) == 1
+          path.write_text(text.replace(needle, new + needle))
           path = Path('references/muse-mesh.md')
-          path.write_text(path.read_text().replace('4948b232daf24c20669cd82f98d3656ffcb130dd', '05849f9dd595af420dddb2f4b1cf39b88dbf67b9'))
-          subprocess.run(['git', 'add', str(path)], check=True)
+          text = path.read_text()
+          old = 'A separate SHA-256 fingerprint binds model, observed counts, input semantics and'
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, 'A separate SHA-256 fingerprint binds completion status, pricing eligibility,\ncapture completeness, model, observed counts, input semantics and'))
+          diff = subprocess.check_output(['git', 'diff', '--', 'scripts/muse_usage.py', 'tests/test_muse_usage.py', 'references/muse-mesh.md'])
+          assert hashlib.sha256(diff).hexdigest() == '326a1f64d61f45aae84642f6c209ba28b7fd296f43a365792a0d7f0a9a21a6c9', 'Review diff mismatch'
+          assert set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines()) == {'scripts/muse_usage.py', 'tests/test_muse_usage.py', 'references/muse-mesh.md'}
           PY
-          # The normal authenticated connector adds this workflow in a separate commit.
-          # Actions' content token cannot and will not write workflow files.
-          git restore --staged .github/workflows/muse-integration.yml
-          mv .github/workflows/muse-integration.yml ../evidence/muse-integration.yml
-      - name: Verify integration and inherited package contracts before publication
-        working-directory: delivery
+      - name: Test before publishing the correction
         run: |
           python -m unittest discover -s tests -p 'test_muse_usage.py' -v
           python -m unittest discover -s tests -p 'test_ledger_mcp.py' -v
           python -m unittest discover -s tests -p 'test_package_*.py' -v
           python scripts/validate_package.py
-          python -m compileall -q scripts tests
-      - name: Commit and push only the new source review branch
-        working-directory: delivery
+          git diff --check
+      - name: Commit and normal fast-forward push to reviewed branch
         run: |
-          test -z "$(git ls-remote origin refs/heads/feat/muse-mesh-usage-mcp-20261012)"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'feat: add opt-in Muse usage collection and consent-scoped MCP reports'
-          git rev-parse HEAD > ../evidence/ledger-head.sha
-          git rev-parse HEAD^{tree} > ../evidence/ledger-tree.sha
-          git bundle create ../evidence/ledger-published.bundle HEAD
-          git diff HEAD^ HEAD --stat > ../evidence/published-stat.txt
-          sha256sum ../evidence/*.bundle > ../evidence/bundle-sha256.txt
+          git add scripts/muse_usage.py tests/test_muse_usage.py references/muse-mesh.md
+          git commit -m 'fix: reject native replay with changed completion or pricing eligibility'
+          mkdir evidence
+          git rev-parse HEAD > evidence/ledger-head.sha
+          git rev-parse HEAD^{tree} > evidence/ledger-tree.sha
+          git bundle create evidence/ledger-reviewed.bundle HEAD
           git push origin HEAD:refs/heads/feat/muse-mesh-usage-mcp-20261012
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: muse-verified-publication
+          name: muse-reviewed-source
           path: evidence/
           retention-days: 1
