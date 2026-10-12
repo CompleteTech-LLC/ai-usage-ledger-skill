@@ -18,47 +18,45 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
-          ref: c241e5443738bd6c1b61fb823b7285f35286649c
+          ref: 3f7ca1e5d0528670ec326ef6f59e7398a34537b5
           path: ledger
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Reproduce reviewed collision then apply the exact three-file fix
+      - name: Match existing package-test conventions for imports after script-path setup
         working-directory: ledger
         run: |
           python - <<'PY'
-          import runpy
-          helper = runpy.run_path('../stage/.mini-swe-review/apply_publish.py')
-          scope = helper['apply'].__globals__
-          before = 'def snapshot(self, provider=None, **kwargs):\n        return usage.usage_snapshot(response(provider)'
-          after = 'def snapshot(self, observed=None, **kwargs):\n        return usage.usage_snapshot(response(observed)'
-          assert scope['TESTS'].count(before) == 1
-          scope['TESTS'] = scope['TESTS'].replace(before, after)
-          helper['apply']()
+          from pathlib import Path
+          path = Path('tests/test_package_mini_swe_identity.py')
+          text = path.read_text(encoding='utf-8')
+          for line in ('import compile_ai_logs as scanner', 'import ledger_store', 'import mini_swe_usage as usage'):
+              assert text.count(line + '\n') == 1
+              text = text.replace(line + '\n', line + '  # noqa: E402\n')
+          path.write_text(text, encoding='utf-8')
           PY
-      - name: Verify all package tests, package contract and original parser fixtures
+          python -m pip install 'ruff==0.14.0'
+      - name: Run lint, all package tests, package contract and original parser fixtures
         working-directory: ledger
         run: |
           set -o pipefail
-          python -m unittest discover -s tests -p 'test_package_*.py' -v 2>&1 | tee "$RUNNER_TEMP/mini-swe-review-green.txt"
+          ruff check .
+          python -m unittest discover -s tests -p 'test_package_*.py' -v 2>&1 | tee "$RUNNER_TEMP/mini-swe-lint-tests.txt"
           python scripts/validate_package.py
           python tests/make_fixtures.py
-          python -m py_compile scripts/mini_swe_usage.py tests/test_package_mini_swe_identity.py
           git diff --check
-      - name: Publish GitHub-signed repair to isolated fix branch only
+      - name: Publish verified GitHub-signed single-file cleanup to isolated fix branch
         working-directory: ledger
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python ../stage/.mini-swe-review/apply_publish.py publish
+        run: python ../stage/.mini-swe-review/publish_lint.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mini-swe-provider-review-evidence
+          name: mini-swe-lint-evidence
           path: |
-            ${{ runner.temp }}/mini-swe-review-red.txt
-            ${{ runner.temp }}/mini-swe-review-green.txt
-            ${{ runner.temp }}/mini-swe-review-publication.json
-            ${{ runner.temp }}/mini-swe-review-fix.patch
+            ${{ runner.temp }}/mini-swe-lint-tests.txt
+            ${{ runner.temp }}/mini-swe-lint-publication.json
           if-no-files-found: warn
           retention-days: 7
