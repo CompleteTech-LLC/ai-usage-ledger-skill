@@ -185,6 +185,52 @@ class MuseTests(unittest.TestCase):
             mu.scan(self.config)
         self.assertEqual(self.rows(), [])
 
+    def test_completion_status_change_conflicts_after_ingestion(self):
+        for status in ("interrupted", "failed", "cancelled"):
+            for reverse in (False, True):
+                with self.subTest(status=status, reverse=reverse):
+                    original = fixture(status=status)
+                    completed = dict(original, invocation_id=str(uuid.uuid4()), status="completed")
+                    first, second = (completed, original) if reverse else (original, completed)
+                    first, second = (mu.normalize(row, self.source) for row in (first, second))
+                    self.assertEqual(first["request_id"], second["request_id"])
+                    self.assertNotEqual(first["evidence_sha256"], second["evidence_sha256"])
+                    self.assertNotEqual(first["usage_pricing_eligible"], second["usage_pricing_eligible"])
+                    path = str(self.root / (status + str(reverse) + ".sqlite"))
+                    store = ledger_store.Store.open("sqlite", path)
+                    try:
+                        self.assertEqual(store.ingest_verified_events([first]), (1, 0))
+                    finally:
+                        store.close()
+                    store = ledger_store.Store.open("sqlite", path)
+                    try:
+                        extra = mu.normalize(fixture(response_id="d" * 64), self.source)
+                        with self.assertRaisesRegex(ValueError, "conflicting"):
+                            store.ingest_verified_events([extra, second])
+                        rows = list(store.iter_events())
+                        self.assertEqual(len(rows), 1)
+                        self.assertEqual(rows[0]["status"], first["status"])
+                        self.assertEqual(rows[0]["usage_pricing_eligible"], first["usage_pricing_eligible"])
+                        self.assertEqual(store.ingest_verified_events([first]), (0, 1))
+                    finally:
+                        store.close()
+
+    def test_completion_status_change_conflicts_in_first_batch(self):
+        for status in ("interrupted", "failed", "cancelled"):
+            for reverse in (False, True):
+                with self.subTest(status=status, reverse=reverse):
+                    original = fixture(status=status)
+                    completed = dict(original, invocation_id=str(uuid.uuid4()), status="completed")
+                    records = [completed, original] if reverse else [original, completed]
+                    path = str(self.root / (status + str(reverse) + ".sqlite"))
+                    store = ledger_store.Store.open("sqlite", path)
+                    try:
+                        with self.assertRaisesRegex(ValueError, "conflicting"):
+                            store.ingest_verified_events([mu.normalize(row, self.source) for row in records])
+                        self.assertEqual(list(store.iter_events()), [])
+                    finally:
+                        store.close()
+
     def test_inflight_marker_is_coverage_not_a_zero_cost_event(self):
         event = fixture()
         marker = self.spool / (event["invocation_id"] + ".started.json")

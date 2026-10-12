@@ -236,7 +236,7 @@ def normalize(record, source):
     event["request_id"] = hashlib.sha256(canonical(identity).encode()).hexdigest()
     evidence = {key: event[key] for key in ("model", "input_tokens", "input_uncached", "cache_read", "cache_write", "output",
                                            "reasoning", "total", "cost_usd", "usage_source", "input_semantics", "capture_incomplete",
-                                           "charge_source", "estimated_usage")}
+                                           "charge_source", "estimated_usage", "status", "usage_pricing_eligible")}
     event["evidence_sha256"] = hashlib.sha256(canonical(evidence).encode()).hexdigest()
     return event
 

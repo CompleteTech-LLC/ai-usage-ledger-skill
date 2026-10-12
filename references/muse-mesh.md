@@ -219,7 +219,8 @@ of the same response under another local run/attempt do not add a second charge.
 A real provider retry returning a *different* response ID is a separate invocation;
 it is not incorrectly suppressed by hashing identical prompt text.
 
-A separate SHA-256 fingerprint binds model, observed counts, input semantics and
+A separate SHA-256 fingerprint binds completion status, pricing eligibility,
+capture completeness, model, observed counts, input semantics and
 charge evidence. Changed evidence under an existing identity aborts the entire
 transaction, including unrelated new rows in that batch. Nothing is overwritten
 or silently ignored. Keep both receipts and investigate the provider/source
