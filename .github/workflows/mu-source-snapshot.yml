@@ -1,0 +1,49 @@
+name: Muse source snapshot
+on:
+  push:
+    branches: [ci/mu-ledger-source-snapshot-20261012]
+    paths: [.github/workflows/mu-source-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: e9d5e225a802d8eddcc7e1a2fc72cded6db1437e
+          fetch-depth: 0
+          persist-credentials: false
+          path: ledger
+      - uses: actions/checkout@v4
+        with:
+          repository: muse-mesh/mu
+          ref: e537b757c112557f5256b3397523a6772d768697
+          fetch-depth: 0
+          persist-credentials: false
+          path: mu
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build public source bundles and install locked Muse development dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir artifacts
+          git -C ledger update-ref refs/heads/source-main e9d5e225a802d8eddcc7e1a2fc72cded6db1437e
+          git -C ledger bundle create ../artifacts/ledger.bundle refs/heads/source-main
+          git -C mu update-ref refs/heads/source-main e537b757c112557f5256b3397523a6772d768697
+          git -C mu bundle create ../artifacts/mu.bundle refs/heads/source-main
+          corepack enable
+          cd mu
+          corepack pnpm install --frozen-lockfile
+          tar -czf ../artifacts/mu-node-modules.tar.gz node_modules web/node_modules
+          cd ..
+          sha256sum artifacts/* > artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mu-ledger-pinned-sources
+          path: artifacts/
+          retention-days: 3
+          if-no-files-found: error
