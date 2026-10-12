@@ -47,12 +47,15 @@ jobs:
     timeout-minutes: 30
     env:
       MSWEA_SILENT_STARTUP: '1'
-      MSWEA_GLOBAL_CONFIG_DIR: ${{ runner.temp }}/mini-swe-test-config
       MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT: '2'
       PORTKEY_API_KEY: synthetic-not-a-provider-key
       LITELLM_LOCAL_MODEL_COST_MAP: 'True'
-      MINI_SWE_TEST_RECEIPTS: ${{ runner.temp }}/mini-swe-receipts
     steps:
+      - name: Configure isolated test paths
+        run: |
+          echo "MSWEA_GLOBAL_CONFIG_DIR=$RUNNER_TEMP/mini-swe-test-config" >> "$GITHUB_ENV"
+          echo "MINI_SWE_TEST_RECEIPTS=$RUNNER_TEMP/mini-swe-receipts" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/mini-swe-receipts"
       - uses: actions/checkout@v4
         with:
           path: stage
@@ -77,7 +80,6 @@ jobs:
       - name: Install native test dependencies
         run: |
           python -m pip install -e 'mini[dev]' 'litellm==1.96.0'
-          mkdir -p "$MINI_SWE_TEST_RECEIPTS"
           python -m pip freeze > "$MINI_SWE_TEST_RECEIPTS/environment.txt"
       - name: Run actual adapters and deterministic agent reconciliation
         working-directory: ledger
