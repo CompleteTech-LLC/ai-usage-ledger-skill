@@ -41,9 +41,12 @@ jobs:
           pnpm install --frozen-lockfile
       - name: Preserve the fixture runtime for offline reproduction
         working-directory: ${{ runner.temp }}/mu
-        run: tar -czf "$RUNNER_TEMP/mu-runtime.tar.gz" node_modules web/node_modules
+        run: |
+          mkdir -p "$RUNNER_TEMP/muse-runtime"
+          tar -czf "$RUNNER_TEMP/muse-runtime/mu-runtime.tar.gz" node_modules
+          python -m pip download --only-binary=:all: --no-deps ruff==0.14.0 -d "$RUNNER_TEMP/muse-runtime"
       - uses: actions/upload-artifact@v4
         with:
           name: muse-fixture-runtime
-          path: ${{ runner.temp }}/mu-runtime.tar.gz
+          path: ${{ runner.temp }}/muse-runtime/
           retention-days: 3
