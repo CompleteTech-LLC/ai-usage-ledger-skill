@@ -1,0 +1,65 @@
+name: Goose Windows fixture correction
+on:
+  push:
+    branches: [chore/goose-source-delivery-20261012]
+    paths: [.github/workflows/goose-windows-fixtures.yml]
+permissions:
+  contents: write
+jobs:
+  correct:
+    if: github.repository == 'CompleteTech-LLC/ai-usage-ledger-skill' && github.ref == 'refs/heads/chore/goose-source-delivery-20261012'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 75224829823cca8642b380aab1e5e9a366a15d3f
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact fixture lifecycle correction
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tests/test_goose_usage.py')
+          s = p.read_text()
+          assert s.count('from contextlib import contextmanager') == 1
+          s = s.replace('from contextlib import contextmanager', 'from contextlib import ExitStack, closing, contextmanager')
+          assert s.count('with sqlite3.connect(self.db) as conn:') == 1
+          s = s.replace('with sqlite3.connect(self.db) as conn:', 'with closing(sqlite3.connect(self.db)) as conn:')
+          s = s.replace('with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:', 'with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp, ExitStack() as cleanup:')
+          s = s.replace('self.addCleanup(conn.close)', 'cleanup.callback(conn.close)').replace('self.addCleanup(store.close)', 'cleanup.callback(store.close)')
+          p.write_text(s)
+          p = Path('references/goose.md')
+          p.write_text(p.read_text() + '\n### Windows report timezone data\n\nThe native collector remains standard-library only. The existing scoped-report\nrenderer requires installed IANA timezone data. On Windows Python installations\nwithout that data, install `tzdata` in the ledger Python environment\n(`python -m pip install tzdata`) before generating time-scoped reports. Collection,\nstorage and token queries do not require it. The three-OS integration workflow\ninstalls this report prerequisite on Windows rather than skipping report tests.\n')
+          p = Path('tests/README.goose.md')
+          p.write_text(p.read_text() + '\nOn Windows, the existing scoped-report end-to-end checks need IANA timezone\ndata: run `python -m pip install tzdata` in the test environment first. Native\ncollection itself has no additional dependency. Fixture SQLite connections are\nexplicitly closed before temporary-directory cleanup, including concurrent\nwriters and assertion/error paths.\n')
+          PY
+          git add --all
+          git diff --cached --check
+          test "$(git write-tree)" = 5a5305b246bfffc024521a54cd4d945d89223bd4
+      - name: Verify native contracts before publication
+        run: |
+          python -m pip install ruff
+          ruff check scripts tests
+          python -m unittest discover -s tests -p 'test_goose*.py' -v
+          python scripts/validate_package.py
+      - name: Publish only tested fixture and documentation changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import base64, json, os, pathlib, subprocess, urllib.request
+          assert subprocess.check_output(['git', 'write-tree'], text=True).strip() == '5a5305b246bfffc024521a54cd4d945d89223bd4'
+          names = ['tests/test_goose_usage.py', 'references/goose.md', 'tests/README.goose.md']
+          additions = [{'path': n, 'contents': base64.b64encode(pathlib.Path(n).read_bytes()).decode()} for n in names]
+          variables = {'input': {'branch': {'repositoryNameWithOwner': 'CompleteTech-LLC/ai-usage-ledger-skill', 'branchName': 'feat/goose-ledger-integration-20261012'}, 'expectedHeadOid': '75224829823cca8642b380aab1e5e9a366a15d3f', 'message': {'headline': 'test: close Goose fixture writers before Windows cleanup', 'body': 'Use closing and ExitStack for SQLite fixture handles; document the existing scoped report timezone-data prerequisite. Preserve all native tests and assertions.'}, 'fileChanges': {'additions': additions}}}
+          query = 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }'
+          req = urllib.request.Request('https://api.github.com/graphql', data=json.dumps({'query': query, 'variables': variables}).encode(), headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Content-Type': 'application/json'})
+          with urllib.request.urlopen(req, timeout=60) as response:
+              result = json.load(response)
+          if result.get('errors'):
+              raise RuntimeError(json.dumps(result['errors']))
+          print(json.dumps(result['data']))
+          PY
