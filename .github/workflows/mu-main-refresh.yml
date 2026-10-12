@@ -1,0 +1,29 @@
+name: Muse main refresh
+on:
+  push:
+    branches: [ci/mu-ledger-source-snapshot-20261012]
+    paths: [.github/workflows/mu-main-refresh.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 4948b232daf24c20669cd82f98d3656ffcb130dd
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bundle reviewed current main
+        run: |
+          mkdir -p artifacts
+          git update-ref refs/heads/source-main 4948b232daf24c20669cd82f98d3656ffcb130dd
+          git bundle create artifacts/ledger-current.bundle refs/heads/source-main
+          sha256sum artifacts/ledger-current.bundle > artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mu-ledger-main-refresh
+          path: artifacts/
+          retention-days: 3
+          if-no-files-found: error
