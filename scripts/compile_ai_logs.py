@@ -1358,6 +1358,8 @@ def load_pricing(path):
 
 def price_event(e, pricing):
     """Return (api_cost_usd, cost_if_nothing_cached_usd, priced_as, assumed) for one event."""
+    if e.get("usage_pricing_eligible") is False:
+        return 0.0, 0.0, None, "Incomplete or estimated usage; token category sums may be partial"
     if not pricing:
         return 0.0, 0.0, None, None
     models = pricing.get("models", {})

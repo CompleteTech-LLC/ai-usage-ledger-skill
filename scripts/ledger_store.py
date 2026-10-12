@@ -168,6 +168,45 @@ class SqliteStore(Store):
         c.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, started_at TEXT, finished_at TEXT, meta TEXT)")
         c.commit()
 
+    def ingest_verified_events(self, events, fingerprint_field="evidence_sha256"):
+        """Atomically append validated request-ID events, refusing conflicting evidence.
+
+        Additive API for live collectors. Existing file ingestion is unchanged. The
+        caller supplies a SHA-256 fingerprint of charge-relevant evidence; changing
+        counts under an existing native request ID is an error, never a silent skip.
+        SQLite serializes competing writers. Nothing already stored is updated.
+        """
+        batch = []
+        for event in events:
+            event = dict(event)
+            fingerprint = event.get(fingerprint_field)
+            if not event.get("request_id") or not isinstance(fingerprint, str) or len(fingerprint) != 64:
+                raise ValueError("verified ingestion requires request identity and evidence fingerprint")
+            if any(c not in "0123456789abcdef" for c in fingerprint):
+                raise ValueError("invalid evidence fingerprint")
+            event["seq"] = 0
+            event["id"] = event_id(event, 0)
+            batch.append(event)
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            seen = {}
+            for event in batch:
+                identity = event["id"]
+                fingerprint = event[fingerprint_field]
+                prior = seen.get(identity)
+                if prior is None:
+                    row = self.db.execute("SELECT extra FROM events WHERE id=?", (identity,)).fetchone()
+                    if row is not None:
+                        prior = (json.loads(row[0]) if row[0] else {}).get(fingerprint_field, "unknown")
+                if prior is not None and prior != fingerprint:
+                    raise ValueError("conflicting evidence for an existing invocation; no events imported")
+                seen[identity] = fingerprint
+            # _put_events uses the same connection/transaction and commits this batch.
+            return self._put_events(batch)
+        except BaseException:
+            self.db.rollback()
+            raise
+
     def _put_events(self, batch):
         ts = now()
         rows = []
