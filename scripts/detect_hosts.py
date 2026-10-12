@@ -141,6 +141,15 @@ def detect_roots(home, prefix="", use_env=False):
         if path and os.path.isdir(path):
             h.setdefault("generic_roots", []).append("%s=%s" % (tool, path))
             found.append("%s (generic): %s" % (tool, path))
+    # Candidate discovery is not authorization. Adding support must not silently
+    # enable a new source in a previously consented manifest or scheduled scan.
+    mini_dirs = [env("MSWEA_GLOBAL_CONFIG_DIR"), H(".config", "mini-swe-agent"),
+                 H("Library", "Application Support", "mini-swe-agent"), H("AppData", "Local", "mini-swe-agent", "mini-swe-agent"),
+                 J(env("XDG_CONFIG_HOME"), "mini-swe-agent") if env("XDG_CONFIG_HOME") else None,
+                 J(env("LOCALAPPDATA"), "mini-swe-agent", "mini-swe-agent") if env("LOCALAPPDATA") else None]
+    for directory in dict.fromkeys(d for d in mini_dirs if d):
+        if os.path.isfile(J(directory, "last_mini_run.traj.json")):
+            found.append("mini-SWE-agent candidate (disabled; requires mini_swe_roots consent): %s" % J(directory, "last_mini_run.traj.json"))
     return h, found
 
 

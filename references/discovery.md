@@ -96,3 +96,21 @@ Each distinct `chatgpt_account_id` (or Claude e-mail) is one account. The same a
 4. Everything else on a host: the host's current login, medium confidence; note unexplained re-logins as a limitation.
 
 Write each rule with its `why`; the report prints them.
+
+## mini-SWE-agent: discovery is not source consent
+
+The detector reports a disabled candidate for `last_mini_run.traj.json` under
+`MSWEA_GLOBAL_CONFIG_DIR` or the platform's mini-SWE config directory. It does not
+read `.env` or credentials and never automatically enables this source. Other
+`agent.output_path` directories and usage exports must be explicitly selected.
+
+Add approved paths as a host's `mini_swe_roots` in the existing `extra_hosts`
+configuration (or use a reviewed manifest without rediscovery). The dedicated
+`--mini-swe-root` flag accepts a trajectory file or a narrow directory of
+`*.traj.json`, `*.usage.json`, and `*.usage.jsonl`. Source directories are not
+recursively added to generic sniffing. Remove these roots or use the normal
+skip-tool filter to disable collection; no scheduler is installed.
+
+See [mini-SWE-agent integration](mini-swe-agent.md) for exact platform paths,
+configuration, exporter opt-in, default-file overwrite limitations, and
+verification commands.
