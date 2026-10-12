@@ -1,0 +1,27 @@
+name: Goose merge audit
+on:
+  push:
+    branches: [chore/goose-source-delivery-20261012]
+    paths: [.github/workflows/goose-merge-audit.yml]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/goose-ledger-integration-20261012
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Capture public tracked repository history
+        run: |
+          git bundle create "$RUNNER_TEMP/goose-reconcile.bundle" refs/remotes/origin/main refs/remotes/origin/feat/goose-ledger-integration-20261012
+          git show -s --format='%H %s' refs/remotes/origin/main HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: goose-reconcile
+          path: ${{ runner.temp }}/goose-reconcile.bundle
+          retention-days: 7
+          if-no-files-found: error
