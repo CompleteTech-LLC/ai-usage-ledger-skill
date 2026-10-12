@@ -2,8 +2,9 @@
 """Opt-in, offline OpenHands SDK usage -> existing ledger scanner JSONL.
 
 Read full native-LLM Metrics histories or SDK completion logs, not streaming
-chunks, gateway responses, accumulated counters, or text-derived estimates.
-No SDK dependency, callbacks, credential discovery, or network access.
+chunks, gateway responses, or accumulated counters. This adapter never estimates
+from text, but SDK/LiteLLM records can contain upstream estimates; their provider
+origin is not attested. No SDK dependency, callbacks, credentials or networking.
 See references/openhands-sdk.md for evidence and coverage boundaries.
 """
 from __future__ import annotations
@@ -29,6 +30,10 @@ TOKEN_FIELDS = (
     "cache_write_tokens", "reasoning_tokens",
 )
 BUCKETS = ("input_uncached", "cache_read", "cache_write", "output", "reasoning")
+USAGE_ORIGIN_NOTE = (
+    "SDK/LiteLLM may estimate missing streaming usage. Recorded usage does not "
+    "attest provider origin; reconcile with provider evidence before calling it verified."
+)
 
 
 class UsageError(ValueError):
@@ -205,6 +210,9 @@ class UsageBatch:
             total=prompt+output, src=source if os.path.isabs(source) else None,
             usage_source=source, kind="unknown", entrypoint="openhands-sdk",
             granularity="call", evidence_class="A", usage_evidence=evidence,
+            # Even response.usage can originate in LiteLLM's tokenizer fallback.
+            # The legacy usage_evidence label identifies shape, not verification.
+            provider_usage_verified=False, sdk_usage_origin="not_attested",
             timestamp_source="sdk_completion_log" if ts else "unavailable",
             request_namespace=self.namespace, sdk_prompt_tokens=prompt, model_aliases=[model],
             observed_sessions=[session], usage_ids=[_label(usage_id)] if usage_id else [],
@@ -321,8 +329,9 @@ class UsageBatch:
         if response.get("object") not in ("chat.completion", "response"):
             self.note("not_a_final_response", source=source)
             return
-        # A Responses API failure/incomplete result can still report actual
-        # consumption. Do not infer zero from its status or finish_reason.
+        # A Responses API failure/incomplete result can still report usage.
+        # Do not infer zero from its status or finish_reason. SDK logs do not
+        # attest whether the usage originated at the provider or in LiteLLM.
         mapped, unknown = _provider_usage(response["usage"])
         record = dict(mapped, response_id=response.get("id"))
         self._add(record, session=conversation_id, source=source,
@@ -337,6 +346,8 @@ class UsageBatch:
             events=len(self.events), duplicate_records=self.duplicates,
             undated_events=sum(e["ts"] is None for e in self.events),
             cache_write_ttl_unspecified_events=sum(e["cache_write"] > 0 for e in self.events),
+            provider_usage_verified=False, origin_unverified_events=len(self.events),
+            usage_origin_note=USAGE_ORIGIN_NOTE,
             partial=any(d["exclusion"] for d in self.diagnostics),
             diagnostics=self.diagnostics,
             coverage="Available native SDK request records only; not provider billing completeness.",
@@ -424,7 +435,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         batch = UsageBatch(args.host, args.namespace)
         _label(args.conversation_id)
-        # Prefer dated provider records when the same call is in both sources.
+        # Prefer dated SDK completion records when a call is in both sources.
         for paths, convert in ((args.completion_log, batch.add_completion_log), (args.stats, batch.add_stats)):
             for path in paths:
                 try:

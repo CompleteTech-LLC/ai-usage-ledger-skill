@@ -18,19 +18,24 @@ records, scheduled tasks, external telemetry or paid model calls are used.
 `check_openhands_sdk.py` exercises real `LLM.completion` / `acompletion` /
 `responses` / `aresponses`, `Telemetry`, `Metrics`, `ConversationStats`, completion
 log serialization, `LLMCompletionLogEvent`, stream assembly, and
-`LocalConversation.send_message`, `run`, `switch_llm`, close and resume. Only the
-provider transport entry points receive deterministic fixture responses; the
-ledger adapter and SDK accounting, serialization and persistence are not mocked.
-The unavailable-cost test explicitly replaces the cost calculation with `None`.
+`LocalConversation.send_message`, `run`, `switch_llm`, close and resume. Provider
+transport entry points receive deterministic fixture responses; the ledger
+adapter and SDK accounting, serialization and persistence are not mocked.
+The unavailable-cost test explicitly replaces cost calculation with `None`.
+The missing-stream-usage test drives the real LiteLLM fallback with `token_counter`
+returning artificial counts (7 input, 3 output), avoiding tokenizer-asset downloads.
+It proves such SDK-recorded estimates are NOT labeled provider-verified.
 
 The persistence test executes three requests across two models and a resumed
 conversation. It combines real SDK-written completion logs with full histories,
 exports through the adapter, ingests into SQLite/JSON/CSV, repeats ingestion after
-reopening each store, queries totals, and runs existing pricing and reporting.
-Expected totals are three requests and 360 tokens, not six requests from counting
-both logs and history. Deliberately synthetic rates test arithmetic, not current
-provider prices. The retry test records a successful response without manufacturing
-usage for a preceding rate-limit failure that supplied none.
+reopening each store, queries totals and provenance, and runs existing pricing and
+reporting. Expected totals are three requests and 360 tokens, not six requests from
+counting both logs and history. Deliberately synthetic rates test arithmetic, not
+current provider prices. The retry test records a successful response without
+manufacturing usage for a preceding rate-limit failure that supplied none.
+The pinned SDK passes `num_retries` to `stop_after_attempt`, so this test configures
+2 total attempts for one failure followed by success.
 
 Important SDK distinction: `LLMResponse.metrics` is a `MetricsSnapshot`, **not** a
 request-history list. Full histories live on `llm.metrics.token_usages` and the

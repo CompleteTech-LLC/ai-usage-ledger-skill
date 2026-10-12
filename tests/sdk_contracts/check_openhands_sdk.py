@@ -2,7 +2,8 @@
 
 Run explicitly in the SDK environment; not part of stdlib-only discovery.
 SDK classes, serialization, telemetry, stream assembly and conversation execution
-are real. Only provider transports are replaced by deterministic responses.
+are real. Provider transports and the documented missing-usage tokenizer fallback
+receive deterministic fixtures; no live model or personal usage data is used.
 """
 from __future__ import annotations
 
@@ -128,6 +129,8 @@ class SDKContracts(unittest.TestCase):
         for event in batch.events:
             self.assertEqual([event[k] for k in adapter.BUCKETS], [70-write, 30, write, 20, 5])
             self.assertEqual(event["total"], 120)
+            self.assertFalse(event["provider_usage_verified"])
+            self.assertEqual(event["sdk_usage_origin"], "not_attested")
         serialized = json.dumps(batch.events)
         self.assertNotIn(SECRET_MARKER, serialized)
         self.assertNotIn(PROMPT_MARKER, serialized)
@@ -199,6 +202,28 @@ class SDKContracts(unittest.TestCase):
             llm.completion(messages(), stream=True, on_token=delivered.append)
         self.assertEqual(len(delivered), 2)
         self.assert_usage(self.batch_for(llm))
+
+    def test_missing_stream_usage_can_be_estimated_upstream_not_provider_verified(self):
+        llm = self.llm()
+        chunks = [ModelResponseStream(id="unreported-stream", model="gpt-4o", created=1704067200,
+                  choices=[dict(index=0, delta=dict(role="assistant", content="Done."),
+                                finish_reason="stop")])]
+        stream = MagicMock(spec=CustomStreamWrapper)
+        stream.__iter__.return_value = iter(chunks)
+        # Exercise the REAL LiteLLM fallback without fetching tokenizer assets.
+        # The deliberately artificial counts are NOT provider observations.
+        target = "litellm.litellm_core_utils.streaming_chunk_builder_utils.token_counter"
+        with patch("openhands.sdk.llm.llm.litellm_completion", return_value=stream), \
+             patch(target, side_effect=[7, 3]) as estimate:
+            llm.completion(messages(), stream=True, on_token=lambda chunk: None)
+        self.assertEqual(estimate.call_count, 2)
+        batch = self.batch_for(llm)
+        self.assertEqual(len(batch.events), 1)
+        self.assertEqual(batch.events[0]["total"], 10)
+        self.assertFalse(batch.events[0]["provider_usage_verified"])
+        self.assertEqual(batch.events[0]["sdk_usage_origin"], "not_attested")
+        self.assertEqual(batch.inventory()["origin_unverified_events"], 1)
+        self.assertIn("estimate", batch.inventory()["usage_origin_note"])
 
     def test_real_telemetry_missing_usage_and_unavailable_cost(self):
         llm = self.llm()
@@ -300,6 +325,7 @@ class SDKContracts(unittest.TestCase):
                     self.assertEqual(store.ingest_events_file(str(source)), (0, 3))
                     rows = list(store.iter_events())
                     self.assertEqual(sum(e["total"] for e in rows), 360)
+                    self.assertTrue(all(e["provider_usage_verified"] is False for e in rows))
                 finally:
                     store.close()
                 db = ledger_query.open_db(kind, path)
@@ -308,6 +334,9 @@ class SDKContracts(unittest.TestCase):
                         ledger_query.PRESETS["by-tool"][1].format(where="tool = ?"), [adapter.TOOL])
                     totals = dict(zip(columns, values[0]))
                     self.assertEqual((totals["calls"], totals["total"]), (3, 360))
+                    verified = db.execute("SELECT COUNT(*) FROM events WHERE "
+                        "json_extract(extra, '$.provider_usage_verified') = 1").fetchone()[0]
+                    self.assertEqual(verified, 0)
                 finally:
                     db.close()
                 now = datetime.now(timezone.utc)
@@ -328,7 +357,8 @@ class SDKContracts(unittest.TestCase):
         self.assertTrue((compiled / "SUMMARY.md").is_file())
 
     def test_native_retry_does_not_manufacture_failed_attempt_tokens(self):
-        llm = self.llm(num_retries=1, retry_min_wait=1, retry_max_wait=1)
+        # The pinned SDK passes num_retries to stop_after_attempt (total attempts).
+        llm = self.llm(num_retries=2, retry_min_wait=1, retry_max_wait=1)
         error = RateLimitError(message="synthetic rate limit", llm_provider="openai", model="gpt-4o")
         with patch("openhands.sdk.llm.llm.litellm_completion",
                    side_effect=[error, chat_response("retry-success")]) as call:
@@ -336,8 +366,7 @@ class SDKContracts(unittest.TestCase):
         self.assertEqual(call.call_count, 2)
         batch = self.batch_for(llm)
         self.assert_usage(batch)
-        self.assertTrue(batch.inventory()["partial"])
-
+        self.assertEqual(len(llm.metrics.token_usages), 1)
 
     def test_real_early_model_switch_is_collected_from_registry(self):
         workspace = self.root / "workspace"
