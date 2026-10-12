@@ -2,32 +2,94 @@ name: mini-SWE integration preflight
 on:
   push:
     branches: [feat/mini-swe-usage-20261012]
-    paths: [.github/workflows/mini-swe-preflight.yml]
+    paths: ['.github/workflows/mini-swe-preflight.yml', '.mini-swe-staging/**']
 permissions:
   contents: read
 jobs:
-  pinned-sources:
+  publish-signed-source:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
+          path: stage
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: e9d5e225a802d8eddcc7e1a2fc72cded6db1437e
+          path: ledger
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply verified patch and run package tests
+        working-directory: ledger
+        run: |
+          python ../stage/.mini-swe-staging/apply.py
+          python -m unittest discover -s tests -p 'test_package_*.py' -v
+          python scripts/validate_package.py
+      - name: Publish signed source to the isolated feature branch only
+        working-directory: ledger
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python ../stage/.mini-swe-staging/publish.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mini-swe-signed-publication
+          path: ${{ runner.temp }}/mini-swe-published.json
+          if-no-files-found: warn
+          retention-days: 7
+  native-and-upstream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MSWEA_SILENT_STARTUP: '1'
+      MSWEA_GLOBAL_CONFIG_DIR: ${{ runner.temp }}/mini-swe-test-config
+      MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT: '2'
+      PORTKEY_API_KEY: synthetic-not-a-provider-key
+      LITELLM_LOCAL_MODEL_COST_MAP: 'True'
+      MINI_SWE_TEST_RECEIPTS: ${{ runner.temp }}/mini-swe-receipts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: stage
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: e9d5e225a802d8eddcc7e1a2fc72cded6db1437e
+          path: ledger
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: SWE-agent/mini-swe-agent
           ref: 04d809ceab9df28f9adaed044884180159172930
-          path: upstream-mini-swe-agent
+          path: mini
           persist-credentials: false
-      - name: Archive public, tracked sources only
-        run: |
-          mkdir -p /tmp/mini-swe-pinned-sources
-          git archive --format=tar HEAD > /tmp/mini-swe-pinned-sources/ledger.tar
-          git -C upstream-mini-swe-agent archive --format=tar HEAD > /tmp/mini-swe-pinned-sources/mini-swe-agent.tar
-          sha256sum /tmp/mini-swe-pinned-sources/*.tar > /tmp/mini-swe-pinned-sources/SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/setup-python@v5
         with:
-          name: mini-swe-pinned-sources
-          path: /tmp/mini-swe-pinned-sources/
-          retention-days: 1
-          if-no-files-found: error
+          python-version: '3.12'
+      - name: Apply verified patch
+        working-directory: ledger
+        run: python ../stage/.mini-swe-staging/apply.py
+      - name: Install native test dependencies
+        run: |
+          python -m pip install -e 'mini[dev]' 'litellm==1.96.0'
+          mkdir -p "$MINI_SWE_TEST_RECEIPTS"
+          python -m pip freeze > "$MINI_SWE_TEST_RECEIPTS/environment.txt"
+      - name: Run actual adapters and deterministic agent reconciliation
+        working-directory: ledger
+        run: python -m pytest tests/test_mini_swe_native.py -v --junitxml="$MINI_SWE_TEST_RECEIPTS/native.xml"
+      - name: Run complete unchanged upstream suite without paid fire tests
+        if: success() || failure()
+        working-directory: mini
+        run: python -m pytest -n auto --junitxml="$MINI_SWE_TEST_RECEIPTS/upstream.xml"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mini-swe-native-and-upstream
+          path: ${{ runner.temp }}/mini-swe-receipts
+          if-no-files-found: warn
+          retention-days: 7
