@@ -8,9 +8,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-import compile_ai_logs as scanner
-import ledger_store
-import mini_swe_usage as usage
+import compile_ai_logs as scanner  # noqa: E402
+import ledger_store  # noqa: E402
+import mini_swe_usage as usage  # noqa: E402
 
 
 def response(provider=None):
