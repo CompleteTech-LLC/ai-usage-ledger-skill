@@ -10,7 +10,6 @@ Runs on Python 3.8+ with stdlib only, so the same file works on Windows and
 inside WSL (run natively there to avoid the slow 9p bridge).
 """
 import argparse
-import goose_usage
 import contextlib
 import csv
 import glob
@@ -30,6 +29,8 @@ try:
     import safety as _safety
 except ImportError:  # standalone copy on a remote host
     _safety = None
+
+import goose_usage  # noqa: E402 -- resolve sibling modules for importlib callers too
 
 _FALLBACK_CRED_BASENAMES = ("auth.json", ".credentials.json", "credentials.json", ".env", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa")
 _FALLBACK_CRED_PATTERNS = re.compile(r"(?:^|[^a-z])(?:token|secret|credential|password|passwd|apikey|api_key)(?:[^a-z]|$)|\.pem$|\.key$|\.p12$|\.pfx$|^\.env\.|^id_rsa|^id_ed25519", re.IGNORECASE)
