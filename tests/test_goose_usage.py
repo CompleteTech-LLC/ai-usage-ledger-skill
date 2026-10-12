@@ -10,7 +10,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from contextlib import contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -325,7 +325,7 @@ class GooseTests(unittest.TestCase):
             try:
                 if not start.wait(10):
                     raise AssertionError("snapshot never reached the writer barrier")
-                with sqlite3.connect(self.db) as conn:
+                with closing(sqlite3.connect(self.db)) as conn:
                     invocation(conn, model="synthetic-model-b")
             except BaseException as ex:
                 failures.append(ex)
@@ -504,11 +504,11 @@ class DiscoveryTests(unittest.TestCase):
 class EndToEndTests(unittest.TestCase):
     def test_scanner_store_query_price_report_replay_and_growth(self):
         for kind in ("sqlite", "json", "csv"):
-            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp, ExitStack() as cleanup:
                 root = Path(tmp)
                 db = root / "sessions" / "sessions.db"
                 conn = database(db, wal=True)
-                self.addCleanup(conn.close)
+                cleanup.callback(conn.close)
                 invocation(conn)
                 paths = {"events": root / "work" / "scans" / "fixture-host" / "events.fixture-host.jsonl",
                          "sessions": root / "work" / "scans" / "fixture-host" / "sessions.fixture-host.jsonl"}
@@ -516,7 +516,7 @@ class EndToEndTests(unittest.TestCase):
                 manifest.write_text(json.dumps({"workdir": str(root / "work"), "hosts": [{"name": "fixture-host", "kind": "local", "goose_roots": ["fixture=" + str(db)]}]}), encoding="utf-8")
                 store_path = root / ("ledger.db" if kind == "sqlite" else "ledger-store")
                 store = ledger_store.Store.open(kind, str(store_path))
-                self.addCleanup(store.close)
+                cleanup.callback(store.close)
 
                 def scan():
                     subprocess.run([sys.executable, str(ROOT / "scripts/run_pipeline.py"), "--manifest", str(manifest), "--only", "scan"], check=True, capture_output=True, text=True)

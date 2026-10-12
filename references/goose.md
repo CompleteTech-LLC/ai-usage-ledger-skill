@@ -257,3 +257,12 @@ Onboarding drafts a host-scoped Goose placeholder with unknown billing and low
 confidence. It reads no Goose credential file and does not claim that the latest
 provider configuration identifies historical billing. Review account rules before
 using account-specific cost summaries.
+
+### Windows report timezone data
+
+The native collector remains standard-library only. The existing scoped-report
+renderer requires installed IANA timezone data. On Windows Python installations
+without that data, install `tzdata` in the ledger Python environment
+(`python -m pip install tzdata`) before generating time-scoped reports. Collection,
+storage and token queries do not require it. The three-OS integration workflow
+installs this report prerequisite on Windows rather than skipping report tests.

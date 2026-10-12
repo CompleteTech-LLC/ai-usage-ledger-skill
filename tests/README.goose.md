@@ -28,3 +28,9 @@ backends, not mocks of those APIs. WAL tests use SQLite writers, not live model
 calls. Windows/macOS/Linux path rules are tested with injected environment data;
 the CI matrix also exercises the collector on those real OS runners. A Windows
 symlink test may be skipped because creating symlinks needs OS privileges.
+
+On Windows, the existing scoped-report end-to-end checks need IANA timezone
+data: run `python -m pip install tzdata` in the test environment first. Native
+collection itself has no additional dependency. Fixture SQLite connections are
+explicitly closed before temporary-directory cleanup, including concurrent
+writers and assertion/error paths.
