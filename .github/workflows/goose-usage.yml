@@ -1,0 +1,54 @@
+name: Goose usage integration
+
+on:
+  push:
+    branches: [feat/goose-ledger-integration-20261012]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Native collector contracts
+        run: python -m unittest discover -s tests -p 'test_goose*.py' -v
+      - name: Read pinned public Goose sources for schema audit
+        if: runner.os == 'Linux'
+        uses: actions/checkout@v4
+        with:
+          repository: aaif-goose/goose
+          ref: 69de89c50cc01d4e0187d6645bf3618729873f74
+          path: upstream-audit
+          persist-credentials: false
+          sparse-checkout: |
+            crates/goose
+            crates/goose-core
+            crates/goose-cli
+            crates/goose-server
+            crates/goose-providers
+            crates/goose-session
+            crates/goose-sdk
+            documentation/docs/guides
+      - name: Archive audited tracked source
+        if: runner.os == 'Linux'
+        run: tar --exclude=.git -czf goose-audit-source.tar.gz upstream-audit
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: goose-audit-source
+          path: goose-audit-source.tar.gz
+          retention-days: 7
+          if-no-files-found: error
