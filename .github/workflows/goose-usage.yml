@@ -24,3 +24,5 @@ jobs:
           python-version: '3.12'
       - name: Native collector and end-to-end contracts
         run: python -m unittest discover -s tests -p 'test_goose*.py' -v
+      - name: Package layout and entrypoint contracts
+        run: python scripts/validate_package.py
