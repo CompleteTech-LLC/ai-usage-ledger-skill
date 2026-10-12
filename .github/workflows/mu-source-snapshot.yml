@@ -26,7 +26,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Build public source bundles and install locked Muse development dependencies
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build pinned public source bundles and development dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -38,10 +41,13 @@ jobs:
           corepack enable
           cd mu
           corepack pnpm install --frozen-lockfile
-          tar -czf ../artifacts/mu-node-modules.tar.gz node_modules web/node_modules
+          tar -czf ../artifacts/mu-node-modules.tar.gz node_modules
           cd ..
-          sha256sum artifacts/* > artifacts/SHA256SUMS
+          python -m pip download --only-binary=:all: --dest artifacts/wheels 'mcp>=1.28,<2' ruff
+          find artifacts -type f -exec sha256sum {} \; > SHA256SUMS
+          mv SHA256SUMS artifacts/
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: mu-ledger-pinned-sources
           path: artifacts/
