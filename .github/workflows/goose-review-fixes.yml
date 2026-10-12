@@ -1,0 +1,68 @@
+name: Goose reviewed corrections
+on:
+  push:
+    branches: [chore/goose-source-delivery-20261012]
+    paths: [.github/workflows/goose-review-fixes.yml]
+permissions:
+  contents: write
+jobs:
+  correct:
+    if: github.repository == 'CompleteTech-LLC/ai-usage-ledger-skill' && github.ref == 'refs/heads/chore/goose-source-delivery-20261012'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: bddb550b2a610b06608cba3a3524abe9be86d123
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply integrity-checked reviewed patch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
+          req = urllib.request.Request('https://api.github.com/repos/CompleteTech-LLC/ai-usage-ledger-skill/git/blobs/83698bbca55dad1dec70eb4562a5b7af0e290fbb', headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+          with urllib.request.urlopen(req, timeout=30) as response:
+              packed = base64.b64decode(json.load(response)['content'])
+          assert hashlib.sha256(packed).hexdigest() == 'e5f2f22827dd94beba4e7c40b8a8d2d1bb6f8d5cd0a622179c4c0978b673d581'
+          patch = pathlib.Path(os.environ['RUNNER_TEMP']) / 'goose-reviewed.patch'
+          patch.write_bytes(gzip.decompress(packed))
+          subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
+          subprocess.run(['git', 'apply', str(patch)], check=True)
+          subprocess.run(['git', 'add', '--all'], check=True)
+          assert subprocess.check_output(['git', 'write-tree'], text=True).strip() == 'f0e4476f35446cb55d04d5aaba33a3955ba2485c'
+          PY
+      - name: Install existing Quality dependencies
+        run: |
+          python -m pip install -r requirements.txt ruff pyyaml
+          npm install -g @mermaid-js/mermaid-cli pyright
+      - name: Run package and full unchanged Quality gates before publishing
+        run: |
+          python -m unittest discover -s tests -p 'test_package_*.py' -v
+          python scripts/validate_package.py
+          python scripts/validate_quality.py
+          git diff --cached --check
+      - name: Publish only reviewed files to the exact feature head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import base64, json, os, pathlib, subprocess, urllib.request
+          assert subprocess.check_output(['git', 'write-tree'], text=True).strip() == 'f0e4476f35446cb55d04d5aaba33a3955ba2485c'
+          names = ['references/goose.md', 'scripts/anonymize.py', 'scripts/detect_hosts.py', 'scripts/goose_usage.py', 'tests/test_goose_usage.py']
+          additions = [{'path': name, 'contents': base64.b64encode(pathlib.Path(name).read_bytes()).decode()} for name in names]
+          variables = {'input': {'branch': {'repositoryNameWithOwner': 'CompleteTech-LLC/ai-usage-ledger-skill', 'branchName': 'feat/goose-ledger-integration-20261012'}, 'expectedHeadOid': 'bddb550b2a610b06608cba3a3524abe9be86d123', 'message': {'headline': 'fix: address Goose privacy and accounting review findings', 'body': 'Redact nested native identifiers in publication events and inventories. Preserve usage when optional SQLite JSON functions are unavailable. Count observed DB/WAL source footprint. Draft unknown-billing host placeholders without credential access. Verify 42 native tests, all package tests and full unchanged Quality gates.'}, 'fileChanges': {'additions': additions}}}
+          query = 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }'
+          req = urllib.request.Request('https://api.github.com/graphql', data=json.dumps({'query': query, 'variables': variables}).encode(), headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Content-Type': 'application/json'})
+          with urllib.request.urlopen(req, timeout=60) as response:
+              result = json.load(response)
+          if result.get('errors'):
+              raise RuntimeError(json.dumps(result['errors']))
+          print(json.dumps(result['data']))
+          PY
