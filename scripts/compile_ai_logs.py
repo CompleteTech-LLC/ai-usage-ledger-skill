@@ -30,6 +30,8 @@ try:
 except ImportError:  # standalone copy on a remote host
     _safety = None
 
+import goose_usage  # noqa: E402 -- resolve sibling modules for importlib callers too
+
 _FALLBACK_CRED_BASENAMES = ("auth.json", ".credentials.json", "credentials.json", ".env", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa")
 _FALLBACK_CRED_PATTERNS = re.compile(r"(?:^|[^a-z])(?:token|secret|credential|password|passwd|apikey|api_key)(?:[^a-z]|$)|\.pem$|\.key$|\.p12$|\.pfx$|^\.env\.|^id_rsa|^id_ed25519", re.IGNORECASE)
 _FALLBACK_CRED_DIRS = {".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker"}
@@ -1093,6 +1095,8 @@ def _usage_like(d):
 
 def _walk_usage(node, ctx, found, depth=0):
     """Yield (usage_dict, context) for every usage-like dict; ctx carries nearest model/timestamp/cost seen above."""
+    if goose_usage.is_goose_session(node):
+        return  # Goose exports/counters are never generic billable calls.
     if depth > 12:
         return
     if isinstance(node, dict):
@@ -1147,8 +1151,14 @@ def scan_generic(root, host, out, stats, session_meta, out_prompts, tool):
         try:
             if path.endswith(".jsonl"):
                 with open(path, "rb") as fh:
-                    for raw in fh:
+                    for line_number, raw in enumerate(fh):
                         stats.lines += 1
+                        if line_number == 0:
+                            try:
+                                if goose_usage.is_goose_session(json.loads(raw)):
+                                    break  # Legacy header owns the whole transcript, not just this line.
+                            except (ValueError, RecursionError):
+                                pass
                         if not any(k.encode() in raw for k in ("usage", "token", "Tokens")):
                             continue
                         try:
@@ -1210,6 +1220,10 @@ def cmd_scan(a):
     mini_roots = getattr(a, "mini_swe_root", None) or []
     for root in mini_roots:
         check_generic_root(os.path.realpath(os.path.expanduser(root)))
+    goose_specs = list(getattr(a, "goose_root", None) or []) + [root for tool, root in generic if tool == "goose"]
+    for spec in goose_specs:
+        goose_usage.split_root(spec)  # Validate all explicit paths before opening scan outputs.
+    generic = [(tool, root) for tool, root in generic if tool != "goose"]
     _private_dir(a.out_dir)
     stats = Stats()
     session_meta = []
@@ -1290,6 +1304,27 @@ def cmd_scan(a):
                 scan_mini_swe(root, a.host, out, stats, session_meta, mini_seen)
                 inventory.append({"tool": "mini-swe-agent", "host": a.host, "root": root, "events": stats.events - n0,
                                   "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0, "prompts": 0})
+        goose_seen = set()
+        for spec in goose_specs:
+            events, coverage = goose_usage.collect(spec, a.host)
+            for e in events:
+                if e["request_id"] in goose_seen:
+                    stats.dedup += 1
+                    continue
+                goose_seen.add(e["request_id"])
+                out.write(json.dumps(e, allow_nan=False) + "\n")
+                stats.events += 1
+            stats.files += coverage["files"]
+            stats.bytes += coverage["bytes"]
+            stats.errors += coverage["errors"]
+            inventory.append(coverage)
+            by_session = defaultdict(list)
+            for e in events:
+                by_session[e["session"]].append(e)
+            for sid, rows in by_session.items():
+                session_meta.append({"tool": "goose", "host": a.host, "session": sid, "calls": len(rows),
+                                     "first_ts": min(e["ts"] for e in rows), "last_ts": max(e["ts"] for e in rows),
+                                     "file": None, "kind": "main", "model": rows[0]["model"] if len({e["model"] for e in rows}) == 1 else None})
         for tool, root in generic:
             n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             skipped = scan_generic(root, a.host, out, stats, session_meta, outp, tool)
@@ -1350,6 +1385,11 @@ def price_event(e, pricing):
         assumed = "; ".join(x for x in (assumed, "mini-SWE usage has missing/conflicting source fields; cost covers normalized categories only") if x)
     if row.get("assumed"):
         assumed = "; ".join(x for x in (assumed, row["assumed"]) if x)
+    if e.get("tool") == "goose":
+        note = "Goose API-equivalent estimate: unreported cache categories use uncached input; cache-write TTL uses the snapshot default; native cost evidence is separate"
+        assumed = "; ".join(x for x in (assumed, note) if x)
+        if row.get("use_logged_cost") and e.get("cost_usd") is None:
+            return 0.0, 0.0, None, "Goose has no currency-verified logged charge"
     if row.get("use_logged_cost"):
         c = float(e.get("cost_usd") or 0)
         return c, c, priced_as, assumed
@@ -1497,6 +1537,7 @@ def cmd_report(a):
     }
     AC = load_accounts(a.accounts)
     n_events = 0
+    goose_report_seen = set()
     unsorted = os.path.join(a.out_dir, "all_events.unsorted.csv")
     with _private_open(unsorted, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
@@ -1511,6 +1552,11 @@ def cmd_report(a):
                             continue
                         if e.get("model") == "<synthetic>" and not e.get("total"):
                             continue  # Claude Code placeholder rows, no API call behind them
+                        if e.get("tool") == "goose" and e.get("request_id"):
+                            key = (e.get("host"), e["request_id"])
+                            if key in goose_report_seen:
+                                continue
+                            goose_report_seen.add(key)
                         n_events += 1
                         cost, nocache, priced_as, assumed = price_event(e, pricing)
                         e["api_cost_usd"] = round(cost, 6)
@@ -1832,6 +1878,7 @@ def main():
     s.add_argument("--vibe-root", action="append", help="Mistral Vibe home (~/.vibe)")
     s.add_argument("--continue-root", action="append", help="Continue home (~/.continue)")
     s.add_argument("--mini-swe-root", action="append", help="explicitly authorized mini-SWE trajectory file or dedicated trajectory/usage directory; disabled by default")
+    s.add_argument("--goose-root", action="append", help="[source-id=]<sessions directory or database>: native Goose usage; metadata only, no source writes")
     s.add_argument("--generic-root", action="append", help="<tool>=<dir>: best-effort usage sniffing over JSON/JSONL (pi, codebuff, droid, amp, lmstudio, ...); the dir must be the tool's own directory, never a home, drive root or AppData/.config; credential-looking files are skipped")
     s.add_argument("--no-prompts", action="store_true", help="do not record prompt text: no prompts.<host>.jsonl is written and prompt-only history files are not opened (run_pipeline passes this unless the manifest sets capture_prompts: true)")
     s.add_argument("--out-dir", required=True)

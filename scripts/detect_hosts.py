@@ -14,6 +14,7 @@ from the credential files it can read (identity claims only; tokens are never pr
 
 Standard library only.
 """
+import goose_usage
 import argparse
 import base64
 import glob
@@ -85,6 +86,12 @@ def detect_roots(home, prefix="", use_env=False):
         if path and os.path.exists(path):
             h.setdefault(key, []).append(path)
             found.append("%s: %s" % (label, path))
+
+    for path in goose_usage.candidate_roots(home, "linux" if prefix else ("win32" if IS_WIN else "darwin" if IS_MAC else "linux"),
+                                            dict(os.environ) if use_env else {},
+                                            roaming=goose_usage.windows_roaming_dir() if IS_WIN and use_env and not prefix else None):
+        add("goose_roots", prefix + path if prefix else path, "Goose sessions (native usage)")
+
 
     codex = env("CODEX_HOME") or H(".codex")
     if os.path.isdir(J(codex, "sessions")) or os.path.isdir(J(codex, "archived_sessions")):
@@ -375,6 +382,13 @@ def draft_accounts(hosts, read_credentials=False, identifiable=False, warn=True)
         credential_warning([p for p in paths if os.path.isfile(p)], identifiable)
     for h in hosts:
         pref = h.get("share_fallback", "") if h.get("kind") == "wsl" else ""
+        if h.get("goose_roots"):
+            key = "goose:%s" % h["name"]
+            registry.setdefault(key, {"provider": "mixed", "label": "Goose usage on %s" % h["name"],
+                                      "plan": "unknown (review provider accounts and billing)", "monthly_usd": 0,
+                                      "evidence": "host placeholder; no Goose credential file was read"})
+            rules.append({"when": {"tool": "goose", "host": h["name"]}, "account": key, "billing": "unknown", "confidence": "low",
+                          "why": "host placeholder only; provider switching and billing are not inferred from current configuration"})
         for root in h.get("codex_roots", []):
             a = read_codex_account(pref + root if pref else root, identifiable) if read_credentials else None
             if a:

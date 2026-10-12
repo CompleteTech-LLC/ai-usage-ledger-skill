@@ -110,3 +110,15 @@ The first two commands use only the standard library and test the checkout contr
 ## License
 
 Code, templates and documentation retain the [MIT license](LICENSE). Names, logos, seals and other brand assets remain subject to [BRAND_ASSETS.md](BRAND_ASSETS.md). No private assets or font files are added by this alignment.
+
+## Native Goose token tracking
+
+Goose session schema 17 (audited 1.54.0 source) is supported through the existing
+scanner and `goose_roots` manifest field. After normal onboarding and root review,
+`python scripts/ledger.py run --tools goose` collects native usage records;
+`--skip-tools goose` disables them for a run. No Goose changes or provider calls
+are needed. Existing SQLite/JSON/CSV stores, queries and snapshot-priced reports
+are reused. Session totals, legacy headers and exports are not extra billable
+calls. Provider attribution may be inferred or unavailable; native cost is not
+silently treated as billed USD. See [setup, mappings, privacy and validation](references/goose.md),
+including the private temporary DB/WAL snapshot and supported-version limits.

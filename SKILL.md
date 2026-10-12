@@ -290,3 +290,16 @@ Saved price files are persistent operator configuration and can lag the bundled 
 | Generated pages | The dashboard, study and documents are self-contained: no external fonts, images or stylesheets, and a `Content-Security-Policy` meta tag that forbids network loads. A remote logo or Google Fonts stylesheet is used only when `branding.allow_external_resources` is true. |
 | Publishing | Dashboards and study packages are published only when the operator asks (Artifacts, files, or a repository). |
 | Data | Scanned transcripts and the compiled ledger never leave the operator's machines through this skill. |
+
+## Goose native integration
+
+For Goose, use `goose_roots` and the dedicated native collector described in
+[the Goose guide](references/goose.md), not generic export totals. Observe normal
+onboarding/profile consent. The audited source is 1.54.0 with session schema 17;
+unknown schemas, carried-forward totals and legacy exports are coverage gaps,
+not guessed per-call usage. Keep provider inference/unknowns and native cost
+provenance separate from snapshot-priced API equivalents. Report inventory gaps
+alongside the dashboard. The read-only reader stages a private temporary DB/WAL
+copy (including raw transcript bytes) but retains only allowlisted usage metadata;
+disclose that transient-copy caveat where relevant. Do not enable prompts,
+credentials, other profiles, archives or schedules merely to validate it.

@@ -101,3 +101,21 @@ formats so it cannot bypass consent or duplicate the dedicated parser.
 See [mini-SWE-agent integration](mini-swe-agent.md) for the backend/version matrix,
 complete category mappings, partial-data flags, concurrency, failure paths,
 privacy, and reconciliation commands.
+
+## Goose native SQLite (schema 17)
+
+`goose_roots` selects the dedicated reader, not generic JSON sniffing. The audited
+Goose 1.54.0 source persists immutable `usage_ledger` rows with `id`, `session_id`,
+`created_timestamp` (UTC seconds), `model`, nullable `input_tokens`, `output_tokens`,
+`total_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cost`, `cost_source`
+and `is_compaction`. Input includes both cache categories. Output is not increased
+by an invented reasoning count. Native currency, cache TTL, provider request ID
+and reasoning breakdown are unavailable. Historical provider is only a labelled
+unique-message-usage inference; the current session provider is never substituted.
+
+Class A native records, Class B `accumulated_*`/legacy/carried-forward counters and
+Class C snapshot-priced API estimates remain separate. Exports do not contain
+the immutable native ledger and are not billable input. Repeated scans reuse
+identities; growing sessions contribute only new usage rows. The bounded legacy
+JSONL first header is coverage-only, not a guessed final-session total or delta.
+See [Goose field mappings, versions, exclusions and privacy](goose.md).
