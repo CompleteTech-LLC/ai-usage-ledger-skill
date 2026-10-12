@@ -17,6 +17,10 @@ The ledger is the evidence member of the CompleteTech LLC skill family. It suppl
 
 [Onboarding](ONBOARDING.md) separates a safe fixture demonstration from real source onboarding. [BRANDING.md](BRANDING.md) describes presentation and downstream handoffs. The previous full README is preserved byte-for-byte in [REFERENCE.md](REFERENCE.md) for its catalog and examples; use the current **Before You Start** and **Core Workflow** in [SKILL.md](SKILL.md) for consent and operational boundaries. In particular, onboarding does not register a schedule: `schedule install` requires its own operator consent.
 
+## Muse Mesh integration
+
+[Native Muse usage and MCP reporting](references/muse-mesh.md) provides opt-in metadata collection, transactional replay-safe imports, and separately consented reports through Muse's existing MCP client. The guide includes an apply-ready upstream patch and a deterministic end-to-end example.
+
 ## OpenClaw / ClawHub Metadata
 
 | Field | Value |
