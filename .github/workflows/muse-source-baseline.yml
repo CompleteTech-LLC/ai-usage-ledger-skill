@@ -1,0 +1,45 @@
+name: Muse pinned source baseline
+on:
+  push:
+    branches: [work/muse-ledger-baseline-20261012]
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: e9d5e225a802d8eddcc7e1a2fc72cded6db1437e
+          path: ledger
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: muse-mesh/mu
+          ref: e537b757c112557f5256b3397523a6772d768697
+          path: mu
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Package baseline and public Git objects (no Git configuration or credentials)
+        run: |
+          mkdir snapshots
+          git -C ledger bundle create ../snapshots/ledger.bundle HEAD
+          git -C mu bundle create ../snapshots/mu.bundle HEAD
+          git -C ledger rev-parse HEAD > snapshots/ledger.sha
+          git -C mu rev-parse HEAD > snapshots/mu.sha
+          sha256sum snapshots/*.bundle > snapshots/SHA256SUMS
+      - name: Existing package contracts
+        working-directory: ledger
+        run: |
+          python -m unittest discover -s tests -p 'test_package_*.py' -v
+          python scripts/validate_package.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: muse-ledger-pinned-sources
+          path: snapshots/
+          retention-days: 1
