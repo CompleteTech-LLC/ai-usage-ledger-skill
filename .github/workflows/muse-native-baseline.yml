@@ -1,0 +1,39 @@
+name: Muse native baseline
+on:
+  push:
+    branches: [work/muse-ledger-baseline-20261012]
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: muse-mesh/mu
+          ref: e537b757c112557f5256b3397523a6772d768697
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      - name: Retain installed public dependency tree (no project or credential files)
+        run: |
+          mkdir -p baseline-evidence
+          tar -czf baseline-evidence/mu-dependencies.tgz node_modules web/node_modules
+          sha256sum baseline-evidence/mu-dependencies.tgz > baseline-evidence/SHA256SUMS
+      - name: Record baseline typecheck separately from the upstream build gate
+        run: |
+          set +e
+          pnpm exec tsc --noEmit > baseline-evidence/typecheck.txt 2>&1
+          echo "$?" > baseline-evidence/typecheck.exit
+          exit 0
+      - name: Upstream build gate
+        run: pnpm build
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: muse-native-baseline
+          path: baseline-evidence/
+          retention-days: 1
