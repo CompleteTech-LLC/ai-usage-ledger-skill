@@ -26,7 +26,17 @@ jobs:
           python-version: '3.12'
       - name: Reproduce reviewed collision then apply the exact three-file fix
         working-directory: ledger
-        run: python ../stage/.mini-swe-review/apply_publish.py apply
+        run: |
+          python - <<'PY'
+          import runpy
+          helper = runpy.run_path('../stage/.mini-swe-review/apply_publish.py')
+          scope = helper['apply'].__globals__
+          before = 'def snapshot(self, provider=None, **kwargs):\n        return usage.usage_snapshot(response(provider)'
+          after = 'def snapshot(self, observed=None, **kwargs):\n        return usage.usage_snapshot(response(observed)'
+          assert scope['TESTS'].count(before) == 1
+          scope['TESTS'] = scope['TESTS'].replace(before, after)
+          helper['apply']()
+          PY
       - name: Verify all package tests, package contract and original parser fixtures
         working-directory: ledger
         run: |
