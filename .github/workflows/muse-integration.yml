@@ -1,0 +1,49 @@
+name: Muse integration
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  fixture-environment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Capture reproducible public source snapshots
+        run: |
+          mkdir -p "$RUNNER_TEMP/muse-evidence"
+          git bundle create "$RUNNER_TEMP/muse-evidence/ledger.bundle" HEAD
+          git clone --no-checkout https://github.com/muse-mesh/mu.git "$RUNNER_TEMP/mu"
+          git -C "$RUNNER_TEMP/mu" checkout --detach e537b757c112557f5256b3397523a6772d768697
+          git -C "$RUNNER_TEMP/mu" bundle create "$RUNNER_TEMP/muse-evidence/mu.bundle" HEAD
+          git rev-parse HEAD > "$RUNNER_TEMP/muse-evidence/ledger-sha.txt"
+          git -C "$RUNNER_TEMP/mu" rev-parse HEAD > "$RUNNER_TEMP/muse-evidence/mu-sha.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muse-source-snapshots
+          path: ${{ runner.temp }}/muse-evidence/
+          retention-days: 7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install the pinned Muse dependency graph
+        working-directory: ${{ runner.temp }}/mu
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.30.1 --activate
+          pnpm install --frozen-lockfile
+      - name: Preserve the fixture runtime for offline reproduction
+        working-directory: ${{ runner.temp }}/mu
+        run: tar -czf "$RUNNER_TEMP/mu-runtime.tar.gz" node_modules web/node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muse-fixture-runtime
+          path: ${{ runner.temp }}/mu-runtime.tar.gz
+          retention-days: 3
