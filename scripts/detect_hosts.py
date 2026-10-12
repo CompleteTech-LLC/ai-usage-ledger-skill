@@ -14,6 +14,7 @@ from the credential files it can read (identity claims only; tokens are never pr
 
 Standard library only.
 """
+import goose_usage
 import argparse
 import base64
 import glob
@@ -85,6 +86,12 @@ def detect_roots(home, prefix="", use_env=False):
         if path and os.path.exists(path):
             h.setdefault(key, []).append(path)
             found.append("%s: %s" % (label, path))
+
+    for path in goose_usage.candidate_roots(home, "linux" if prefix else ("win32" if IS_WIN else "darwin" if IS_MAC else "linux"),
+                                            dict(os.environ) if use_env else {},
+                                            roaming=goose_usage.windows_roaming_dir() if IS_WIN and use_env and not prefix else None):
+        add("goose_roots", prefix + path if prefix else path, "Goose sessions (native usage)")
+
 
     codex = env("CODEX_HOME") or H(".codex")
     if os.path.isdir(J(codex, "sessions")) or os.path.isdir(J(codex, "archived_sessions")):
