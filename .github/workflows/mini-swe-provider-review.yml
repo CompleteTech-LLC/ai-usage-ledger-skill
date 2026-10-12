@@ -1,0 +1,54 @@
+name: mini-SWE provider identity review repair
+on:
+  push:
+    branches: [work/mini-swe-provider-review-20261012]
+    paths: ['.mini-swe-review/**', '.github/workflows/mini-swe-provider-review.yml']
+permissions:
+  contents: read
+jobs:
+  validate-and-sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: stage
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: c241e5443738bd6c1b61fb823b7285f35286649c
+          path: ledger
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reproduce reviewed collision then apply the exact three-file fix
+        working-directory: ledger
+        run: python ../stage/.mini-swe-review/apply_publish.py apply
+      - name: Verify all package tests, package contract and original parser fixtures
+        working-directory: ledger
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p 'test_package_*.py' -v 2>&1 | tee "$RUNNER_TEMP/mini-swe-review-green.txt"
+          python scripts/validate_package.py
+          python tests/make_fixtures.py
+          python -m py_compile scripts/mini_swe_usage.py tests/test_package_mini_swe_identity.py
+          git diff --check
+      - name: Publish GitHub-signed repair to isolated fix branch only
+        working-directory: ledger
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python ../stage/.mini-swe-review/apply_publish.py publish
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mini-swe-provider-review-evidence
+          path: |
+            ${{ runner.temp }}/mini-swe-review-red.txt
+            ${{ runner.temp }}/mini-swe-review-green.txt
+            ${{ runner.temp }}/mini-swe-review-publication.json
+            ${{ runner.temp }}/mini-swe-review-fix.patch
+          if-no-files-found: warn
+          retention-days: 7
