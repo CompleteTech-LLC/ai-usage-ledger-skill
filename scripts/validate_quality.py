@@ -113,7 +113,7 @@ def smoke_pipeline() -> None:
 
 
 def run_report_tests() -> None:
-    for pattern in ("test_pricing.py", "test_scoped_report.py"):
+    for pattern in ("test_pricing.py", "test_scoped_report.py", "test_package_mini_swe.py"):
         run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", pattern, "-v"])
     print("pricing and scoped report suites ok")
 

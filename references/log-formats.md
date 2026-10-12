@@ -79,3 +79,25 @@ All figures come from per-call usage records the tool wrote at request time (cla
 ## Normalised event schema (output of `scan`)
 
 `tool, host, ts, date, session, model, input_uncached, cache_read, cache_write, cache_write_5m, cache_write_1h, output, reasoning, total, cwd, project, kind (main|subagent), parent, entrypoint, version, effort, plan, credits, limit_id, archived, request_id, src` — then `report` adds `api_cost_usd, cost_if_uncached_usd, cache_savings_usd, priced_as, account, billing, account_confidence`.
+
+## mini-SWE-agent (explicit `--mini-swe-root`)
+
+`mini-swe-agent-1.1` trajectories keep successful Chat usage in
+`messages[].extra.response.usage`, Responses API usage in the response message's
+own `usage`, and rejected-action usage in the `FormatError` message's
+`extra.response.usage`. Do not sum `info.model_stats` with per-response records.
+The optional `mini-swe-agent-usage-1` exporter stores only allowlisted usage and
+provenance before pricing can fail. Its embedded `extra.mini_swe_usage` snapshot
+takes precedence over raw response usage, which the pinned Portkey adapter can
+mutate during cost calculation.
+
+Missing prices never discard tokens. Missing totals are labeled component sums;
+malformed totals never reconstruct prompt tokens by subtraction. Reasoning is
+already in output. Provider/model-scoped response IDs (or export UUIDs) deduplicate
+trajectory/export overlap and repeated ingestion; no-ID legacy records have
+explicitly weaker path-scoped guarantees. Generic sniffing excludes both mini
+formats so it cannot bypass consent or duplicate the dedicated parser.
+
+See [mini-SWE-agent integration](mini-swe-agent.md) for the backend/version matrix,
+complete category mappings, partial-data flags, concurrency, failure paths,
+privacy, and reconciliation commands.
