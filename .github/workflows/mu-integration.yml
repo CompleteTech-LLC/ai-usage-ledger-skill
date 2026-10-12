@@ -1,0 +1,55 @@
+name: Muse integration
+on:
+  push:
+    branches: [main, feat/mu-native-usage-mcp-20261012]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  native-usage-mcp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ledger
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: muse-mesh/mu
+          ref: e537b757c112557f5256b3397523a6772d768697
+          path: mu
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install optional MCP and development checks
+        run: python -m pip install -r ledger/requirements-mcp.txt ruff
+      - name: Ledger consent, accounting, MCP, report and package regressions
+        working-directory: ledger
+        run: |
+          ruff check .
+          python -m unittest discover -s tests -p 'test_package_*.py' -v
+          python scripts/validate_package.py
+          python -m unittest discover -s tests -p 'test_mu_*.py' -v
+          python -m unittest discover -s tests -p 'test_pricing.py' -v
+          python -m unittest discover -s tests -p 'test_scoped_report.py' -v
+      - name: Apply pinned Muse source patch and run checks
+        working-directory: mu
+        run: |
+          git apply --check ../ledger/integrations/mu/mu-usage-ledger.patch
+          git apply ../ledger/integrations/mu/mu-usage-ledger.patch
+          corepack enable
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm typecheck
+          corepack pnpm test
+          corepack pnpm build
+      - name: Actual Muse agent and MCP end-to-end fixture
+        working-directory: mu
+        run: |
+          export LEDGER_REPO="$GITHUB_WORKSPACE/ledger"
+          export LEDGER_PYTHON="$(command -v python)"
+          corepack pnpm test:ledger
