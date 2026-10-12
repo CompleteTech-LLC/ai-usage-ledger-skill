@@ -1,0 +1,33 @@
+name: mini-SWE integration preflight
+on:
+  push:
+    branches: [feat/mini-swe-usage-20261012]
+    paths: [.github/workflows/mini-swe-preflight.yml]
+permissions:
+  contents: read
+jobs:
+  pinned-sources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: SWE-agent/mini-swe-agent
+          ref: 04d809ceab9df28f9adaed044884180159172930
+          path: upstream-mini-swe-agent
+          persist-credentials: false
+      - name: Archive public, tracked sources only
+        run: |
+          mkdir -p /tmp/mini-swe-pinned-sources
+          git archive --format=tar HEAD > /tmp/mini-swe-pinned-sources/ledger.tar
+          git -C upstream-mini-swe-agent archive --format=tar HEAD > /tmp/mini-swe-pinned-sources/mini-swe-agent.tar
+          sha256sum /tmp/mini-swe-pinned-sources/*.tar > /tmp/mini-swe-pinned-sources/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mini-swe-pinned-sources
+          path: /tmp/mini-swe-pinned-sources/
+          retention-days: 1
+          if-no-files-found: error
