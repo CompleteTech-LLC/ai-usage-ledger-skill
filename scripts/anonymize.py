@@ -100,6 +100,24 @@ class Anonymizer:
         self.map["accounts"][key] = out
         return out
 
+    def _goose_evidence(self, node):
+        """Keep numeric evidence, not stable private native identifiers."""
+        if isinstance(node, list):
+            return [self._goose_evidence(value) for value in node]
+        if not isinstance(node, dict):
+            return node
+        result = {}
+        for key, value in node.items():
+            if key in ("source_namespace", "native_session_id", "usage_id", "provider_request_id"):
+                continue
+            if key == "session":
+                result[key] = self.session(value)
+            elif isinstance(value, (dict, list)):
+                result[key] = self._goose_evidence(value)
+            else:
+                result[key] = self.scrub(key, value)
+        return result
+
     # ---- rows -------------------------------------------------------------
     def event(self, e):
         e = dict(e)
@@ -111,6 +129,8 @@ class Anonymizer:
             for key in ("source_request_id", "invocation_id", "run_id", "agent_id"):
                 if e.get(key):
                     e[key] = self.request_id(e[key])
+        if e.get("tool") == "goose" and isinstance(e.get("goose"), dict):
+            e["goose"] = self._goose_evidence(e["goose"])
         e["cwd"] = self.cwd(e.get("cwd"))
         for k in ("src", "project", "text", "id", "ingested_at"):
             e.pop(k, None)
@@ -142,6 +162,8 @@ class Anonymizer:
             r["host"] = self.host(r.get("host"))
             r["root"] = "%s logs" % r.get("tool", "agent")
             r.pop("note", None)
+            if r.get("tool") == "goose":
+                r = self._goose_evidence(r)
             roots.append(r)
         inv["roots"] = roots
         return inv

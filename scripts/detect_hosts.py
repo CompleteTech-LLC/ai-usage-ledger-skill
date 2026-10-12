@@ -382,6 +382,13 @@ def draft_accounts(hosts, read_credentials=False, identifiable=False, warn=True)
         credential_warning([p for p in paths if os.path.isfile(p)], identifiable)
     for h in hosts:
         pref = h.get("share_fallback", "") if h.get("kind") == "wsl" else ""
+        if h.get("goose_roots"):
+            key = "goose:%s" % h["name"]
+            registry.setdefault(key, {"provider": "mixed", "label": "Goose usage on %s" % h["name"],
+                                      "plan": "unknown (review provider accounts and billing)", "monthly_usd": 0,
+                                      "evidence": "host placeholder; no Goose credential file was read"})
+            rules.append({"when": {"tool": "goose", "host": h["name"]}, "account": key, "billing": "unknown", "confidence": "low",
+                          "why": "host placeholder only; provider switching and billing are not inferred from current configuration"})
         for root in h.get("codex_roots", []):
             a = read_codex_account(pref + root if pref else root, identifiable) if read_credentials else None
             if a:

@@ -239,3 +239,21 @@ new store events. Then add authorized activity and check only new usage records
 are appended. Failed/retried requests for which Goose never persisted usage,
 provider-side routing, HTTP attempt IDs, reasoning breakdowns, cost currency,
 cache TTL and exact historical provider joins remain coverage gaps.
+
+## Compatibility and publication checks
+
+Anonymized publication removes native row/session/source identifiers from nested
+Goose event evidence and inventory. Inventory session labels are salted, as are
+normal event identifiers; numeric token/cost evidence remains unchanged. Private
+source namespaces (including path hashes) are not publication-safe identifiers.
+
+SQLite builds without `json_valid`/`json_extract` still collect native usage:
+provider inference is marked unavailable without loading full message metadata.
+Inventory source file/byte counts include the observed DB and WAL, not SHM or the
+multiple internal copy/hash passes. File sizes may change after that observation
+when a session is active; use token reconciliation, not footprint alone, for totals.
+
+Onboarding drafts a host-scoped Goose placeholder with unknown billing and low
+confidence. It reads no Goose credential file and does not claim that the latest
+provider configuration identifies historical billing. Review account rules before
+using account-specific cost summaries.

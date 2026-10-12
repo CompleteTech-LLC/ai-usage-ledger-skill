@@ -10,12 +10,14 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+import anonymize  # noqa: E402
 import compile_ai_logs as compiler  # noqa: E402
 import detect_hosts  # noqa: E402
 import goose_usage as goose  # noqa: E402
@@ -51,6 +53,65 @@ class GooseTests(unittest.TestCase):
         self.assertEqual(info["status"], "ok")
         self.assertNotIn(PRIVATE, json.dumps([events, info]))
         self.assertIsNone(e["src"])
+
+    def test_missing_sqlite_json_functions_preserve_usage(self):
+        invocation(self.conn)
+        original = goose.snapshot
+
+        class WithoutJSON:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def execute(self, sql):
+                if "json_extract" in sql:
+                    raise sqlite3.OperationalError("no such function: json_extract")
+                return self.conn.execute(sql)
+
+        @contextmanager
+        def without_json(db):
+            with original(db) as conn:
+                yield WithoutJSON(conn)
+
+        with mock.patch.object(goose, "snapshot", side_effect=without_json):
+            events, info = self.collect()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["total"], 1050)
+        self.assertIsNone(events[0]["provider"])
+        self.assertEqual(info["status"], "ok")
+        self.assertEqual(info["provider_inference_status"], "sqlite_json_functions_unavailable")
+
+    def test_source_inventory_includes_wal_but_not_shm(self):
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA wal_autocheckpoint=0")
+        invocation(self.conn)
+        wal = Path(str(self.db) + "-wal")
+        expected_bytes = self.db.stat().st_size + wal.stat().st_size
+        events, info = self.collect()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(info["files"], 2)
+        self.assertEqual(info["bytes"], expected_bytes)
+
+    def test_anonymized_events_and_inventory_remove_nested_native_ids(self):
+        namespace, sid = "PRIVATE_SOURCE_ALIAS", "PRIVATE_NATIVE_SESSION"
+        invocation(self.conn, sid=sid)
+        invocation(self.conn, sid=sid, model=None, cost_source="carried_forward", message=False)
+        events, info = goose.collect(namespace + "=" + str(self.db), "fixture-host")
+        before = json.dumps([events, info], sort_keys=True)
+        anonymizer = anonymize.Anonymizer("synthetic-private-salt")
+        anonymous = anonymizer.event(events[0])
+        inv = anonymizer.inventory({"host": "fixture-host", "roots": [info]})
+        encoded = json.dumps([anonymous, inv])
+        for private in (namespace, sid, str(self.db), "source_namespace", "native_session_id", "usage_id", "provider_request_id"):
+            self.assertNotIn(private, encoded)
+        self.assertEqual(anonymous["total"], events[0]["total"])
+        self.assertEqual(anonymous["goose"]["native_tokens"], events[0]["goose"]["native_tokens"])
+        self.assertEqual(inv["roots"][0]["sessions"][0]["counters"]["accumulated_total_tokens"], 2100)
+        self.assertEqual(before, json.dumps([events, info], sort_keys=True))
+        # Exercise the publication CLI as well as direct transformations.
+        src, dst = self.root / "source.jsonl", self.root / "anon.jsonl"
+        src.write_text(json.dumps(events[0]) + "\n", encoding="utf-8")
+        subprocess.run([sys.executable, str(ROOT / "scripts/anonymize.py"), "--salt", "synthetic-private-salt", "--in", str(src), "--out", str(dst)], check=True, capture_output=True)
+        self.assertEqual(json.loads(dst.read_text(encoding="utf-8")), anonymous)
 
     def test_multiple_invocations_same_usage_are_not_collapsed(self):
         invocation(self.conn)
@@ -416,6 +477,21 @@ class DiscoveryTests(unittest.TestCase):
             src.write_text(json.dumps({"hosts": [host]}), encoding="utf-8")
             self.assertEqual(ledger.filter_manifest(str(src), str(dst), only=["goose"]), ["fixture"])
             self.assertEqual(ledger.filter_manifest(str(src), str(dst), skip=["goose"]), [])
+
+    def test_detected_goose_has_only_an_unknown_billing_placeholder(self):
+        host = {"name": "fixture-host", "kind": "local", "goose_roots": ["/synthetic/goose"]}
+        with mock.patch.object(detect_hosts, "read_codex_account", side_effect=AssertionError("credential read")), mock.patch.object(detect_hosts, "read_claude_account", side_effect=AssertionError("credential read")):
+            accounts = detect_hosts.draft_accounts([host])
+        rule = next(r for r in accounts["rules"] if r["when"].get("tool") == "goose")
+        self.assertEqual(rule["when"], {"tool": "goose", "host": "fixture-host"})
+        self.assertEqual(rule["billing"], "unknown")
+        self.assertEqual(rule["confidence"], "low")
+        self.assertEqual(accounts["accounts"][rule["account"]]["provider"], "mixed")
+        self.assertFalse(any(r["when"].get("tool") == "goose" for r in detect_hosts.draft_accounts([])["rules"]))
+
+    def test_pricing_compiler_loads_without_preloaded_script_path(self):
+        code = "import importlib.util; s=importlib.util.spec_from_file_location('isolated_pricing', %r); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); assert callable(m.price_event)" % str(ROOT / "scripts/compile_ai_logs.py")
+        subprocess.run([sys.executable, "-I", "-c", code], check=True, capture_output=True)
 
     def test_remote_scanner_stages_native_module(self):
         with tempfile.TemporaryDirectory() as tmp:

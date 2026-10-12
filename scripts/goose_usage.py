@@ -269,7 +269,16 @@ def _read_database(db, namespace, host):
         if version != SCHEMA_VERSION or "usage_ledger" not in tables or not set(USAGE_COLUMNS) <= _columns(conn, "usage_ledger"):
             return [], counters, {"status": "unsupported_schema", "schema_version": version, "not_billable": True}
         rows = [dict(row) for row in conn.execute("SELECT " + ", ".join(USAGE_COLUMNS) + " FROM usage_ledger ORDER BY id")]
-        providers = _provider_evidence(conn, tables, rows)
+        provider_status = "available"
+        try:
+            providers = _provider_evidence(conn, tables, rows)
+        except sqlite3.OperationalError as ex:
+            # JSON1 is optional in older SQLite builds. Never read full message
+            # metadata as a fallback or discard usage for missing inference.
+            if not re.fullmatch(r"no such function: json_(valid|extract)", str(ex)):
+                raise
+            providers = {}
+            provider_status = "sqlite_json_functions_unavailable"
         created = {}
         if "created_at" in _columns(conn, "sessions"):
             created = {r[0]: r[1] for r in conn.execute("SELECT id, created_at FROM sessions")}
@@ -327,7 +336,7 @@ def _read_database(db, namespace, host):
         for counter in counters:
             counter["collected_native_tokens"] = totals.get(counter["session"], {key: 0 for key in TOKEN_COLUMNS})
         return events, counters, {"status": "ok", "schema_version": version, "native_rows": len(rows), "excluded_rows": dict(excluded), "excluded_usage": excluded_usage,
-                                 "provider_unknown_events": sum(e["provider"] is None for e in events)}
+                                 "provider_unknown_events": sum(e["provider"] is None for e in events), "provider_inference_status": provider_status}
 
 
 def is_goose_session(node):
@@ -375,8 +384,13 @@ def collect(spec: str, host: str):
         else:
             db, legacy = root, []
         if db is not None:
-            coverage["files"] += 1
-            coverage["bytes"] += db.stat().st_size if db.exists() else 0
+            # Report the observed source footprint, including active WAL data,
+            # not SQLite's private SHM and not the number of copy/hash reads.
+            for source in (db, Path(str(db) + "-wal")):
+                stamp = _stamp(source)
+                if stamp is not None:
+                    coverage["files"] += 1
+                    coverage["bytes"] += stamp[2]
             events, coverage["sessions"], details = _read_database(db, namespace, host)
             coverage.update(details)
         else:
@@ -384,11 +398,12 @@ def collect(spec: str, host: str):
         native_sessions = {r["session"] for r in coverage["sessions"]}
         for path in legacy:
             try:
-                _stamp(path)
+                stamp = _stamp(path)
                 info = _legacy_header(path)
                 if info["session"] not in native_sessions:
                     coverage["legacy"].append(info)
                 coverage["files"] += 1
+                coverage["bytes"] += stamp[2] if stamp else 0
             except (OSError, ValueError, RecursionError):
                 coverage["errors"] += 1
         coverage["events"] = len(events)
