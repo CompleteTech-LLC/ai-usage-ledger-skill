@@ -113,7 +113,7 @@ def smoke_pipeline() -> None:
 
 
 def run_report_tests() -> None:
-    for pattern in ("test_pricing.py", "test_scoped_report.py", "test_goose*.py"):
+    for pattern in ("test_pricing.py", "test_scoped_report.py", "test_package_mini_swe.py", "test_goose*.py"):
         run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", pattern, "-v"])
     print("pricing, scoped report and Goose native suites ok")
 

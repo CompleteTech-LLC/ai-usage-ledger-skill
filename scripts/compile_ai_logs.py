@@ -1123,6 +1123,12 @@ def _walk_usage(node, ctx, found, depth=0):
             _walk_usage(v, ctx, found, depth + 1)
 
 
+def _is_mini_swe_source(value):
+    # These records require their own explicit source consent and deduplication.
+    return isinstance(value, dict) and (str(value.get("trajectory_format", "")).startswith("mini-swe-agent-")
+                                      or value.get("schema") == "mini-swe-agent-usage-1")
+
+
 def scan_generic(root, host, out, stats, session_meta, out_prompts, tool):
     """Best-effort reader for tools without a dedicated parser (pi, codebuff, droid, amp, LM Studio, ...).
     Reads every .json/.jsonl under root and emits one event per usage-shaped object. Verify on a sample.
@@ -1155,12 +1161,16 @@ def scan_generic(root, host, out, stats, session_meta, out_prompts, tool):
                         if not any(k.encode() in raw for k in ("usage", "token", "Tokens")):
                             continue
                         try:
-                            _walk_usage(json.loads(raw), {}, found)
+                            document = json.loads(raw)
+                            if not _is_mini_swe_source(document):
+                                _walk_usage(document, {}, found)
                         except Exception:
                             stats.errors += 1
             else:
-                with open(path, encoding="utf-8", errors="replace") as fh:
-                    _walk_usage(json.load(fh), {}, found)
+                with open(path, encoding="utf-8", errors="replace") as stream:
+                    document = json.load(stream)
+                if not _is_mini_swe_source(document):
+                    _walk_usage(document, {}, found)
                 stats.lines += 1
         except Exception:
             stats.errors += 1
@@ -1206,6 +1216,9 @@ def _generic_specs(specs):
 
 def cmd_scan(a):
     generic = _generic_specs(a.generic_root)  # refuses a home, drive root or broad directory before anything is opened or written
+    mini_roots = getattr(a, "mini_swe_root", None) or []
+    for root in mini_roots:
+        check_generic_root(os.path.realpath(os.path.expanduser(root)))
     goose_specs = list(getattr(a, "goose_root", None) or []) + [root for tool, root in generic if tool == "goose"]
     for spec in goose_specs:
         goose_usage.split_root(spec)  # Validate all explicit paths before opening scan outputs.
@@ -1282,6 +1295,14 @@ def cmd_scan(a):
             n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
             scan_continue(root, a.host, out, stats, session_meta, outp)
             inventory.append({"tool": "continue", "host": a.host, "root": root, "events": stats.events - n0, "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0})
+        if mini_roots:
+            from mini_swe_usage import scan as scan_mini_swe
+            mini_seen = set()
+            for root in mini_roots:
+                n0, f0, b0, e0 = stats.events, stats.files, stats.bytes, stats.errors
+                scan_mini_swe(root, a.host, out, stats, session_meta, mini_seen)
+                inventory.append({"tool": "mini-swe-agent", "host": a.host, "root": root, "events": stats.events - n0,
+                                  "files": stats.files - f0, "bytes": stats.bytes - b0, "errors": stats.errors - e0, "prompts": 0})
         goose_seen = set()
         for spec in goose_specs:
             events, coverage = goose_usage.collect(spec, a.host)
@@ -1359,6 +1380,8 @@ def price_event(e, pricing):
                 assumed += ". " + fb["note"]
         if row is None:
             return 0.0, 0.0, None, "no price for %s" % model
+    if e.get("tool") == "mini-swe-agent" and e.get("partial"):
+        assumed = "; ".join(x for x in (assumed, "mini-SWE usage has missing/conflicting source fields; cost covers normalized categories only") if x)
     if row.get("assumed"):
         assumed = "; ".join(x for x in (assumed, row["assumed"]) if x)
     if e.get("tool") == "goose":
@@ -1484,7 +1507,9 @@ def cmd_report(a):
     _private_dir(a.out_dir)
     cols = ["ts", "date", "tool", "host", "session", "kind", "model", "effort", "entrypoint", "version", "cwd",
             "input_uncached", "cache_read", "cache_write", "cache_write_5m", "cache_write_1h", "output", "reasoning", "total",
-            "api_cost_usd", "cost_if_uncached_usd", "cache_savings_usd", "priced_as", "cost_usd", "plan", "account", "billing", "account_confidence", "request_id", "src"]
+            "api_cost_usd", "cost_if_uncached_usd", "cache_savings_usd", "priced_as", "cost_usd", "plan", "account", "billing", "account_confidence", "request_id", "src", "provider", "upstream_provider", "backend", "backend_library_version",
+            "execution_status", "source_calculated_cost", "provider_reported_cost", "cost_provenance", "provider_cost_provenance",
+            "timestamp_provenance", "model_provenance", "total_provenance", "unclassified_tokens", "partial", "usage_warnings"]
     NUM = ("input_uncached", "cache_read", "cache_write", "output", "reasoning", "total")
     COST = ("api_cost_usd", "cost_if_uncached_usd", "cache_savings_usd")
     pricing = load_pricing(a.pricing)
@@ -1851,6 +1876,7 @@ def main():
     s.add_argument("--kimi-root", action="append", help="Kimi Code data dir (~/.kimi or ~/.kimi-code)")
     s.add_argument("--vibe-root", action="append", help="Mistral Vibe home (~/.vibe)")
     s.add_argument("--continue-root", action="append", help="Continue home (~/.continue)")
+    s.add_argument("--mini-swe-root", action="append", help="explicitly authorized mini-SWE trajectory file or dedicated trajectory/usage directory; disabled by default")
     s.add_argument("--goose-root", action="append", help="[source-id=]<sessions directory or database>: native Goose usage; metadata only, no source writes")
     s.add_argument("--generic-root", action="append", help="<tool>=<dir>: best-effort usage sniffing over JSON/JSONL (pi, codebuff, droid, amp, lmstudio, ...); the dir must be the tool's own directory, never a home, drive root or AppData/.config; credential-looking files are skipped")
     s.add_argument("--no-prompts", action="store_true", help="do not record prompt text: no prompts.<host>.jsonl is written and prompt-only history files are not opened (run_pipeline passes this unless the manifest sets capture_prompts: true)")

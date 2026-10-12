@@ -107,6 +107,10 @@ class Anonymizer:
         e["session"] = self.session(e.get("session"))
         if e.get("request_id"):
             e["request_id"] = self.request_id(e["request_id"])
+        if e.get("tool") == "mini-swe-agent":
+            for key in ("source_request_id", "invocation_id", "run_id", "agent_id"):
+                if e.get(key):
+                    e[key] = self.request_id(e[key])
         e["cwd"] = self.cwd(e.get("cwd"))
         for k in ("src", "project", "text", "id", "ingested_at"):
             e.pop(k, None)
