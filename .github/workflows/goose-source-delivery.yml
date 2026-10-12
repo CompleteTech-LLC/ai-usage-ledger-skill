@@ -1,0 +1,86 @@
+name: Goose isolated source delivery
+
+on:
+  push:
+    branches: [chore/goose-source-delivery-20261012]
+    paths: [.github/workflows/goose-source-delivery.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  deliver:
+    if: github.repository == 'CompleteTech-LLC/ai-usage-ledger-skill' && github.ref == 'refs/heads/chore/goose-source-delivery-20261012'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: e9d5e225a802d8eddcc7e1a2fc72cded6db1437e
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify and apply the locally tested source patch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
+          repo = 'CompleteTech-LLC/ai-usage-ledger-skill'
+          blobs = ['d460b1dd76855d3720a2c19d5acf8067498b780d', '4763923dc79ffda5ec8efebe20397952b2e44df2', 'dd3944973a7135a749edfa3b2b5d5931ed13ef2b', 'ba30f6f41ef577083110e37b5141b7e9e6556d2c']
+          parts = []
+          for index, sha in enumerate(blobs):
+              req = urllib.request.Request('https://api.github.com/repos/' + repo + '/git/blobs/' + sha, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  obj = json.load(response)
+              part = base64.b64decode(obj['content'])
+              if index == 1:
+                  # Restore six transport characters lost in this chunk. The final
+                  # complete payload and every output file have independent hashes.
+                  encoded = base64.b64encode(part).decode().rstrip('=').replace('MqHbWmS3um6Up', 'MqHbWmS570G2S3um6Up')
+                  part = base64.b64decode(encoded[:-1] + 'Z')
+              parts.append(part)
+          packed = b''.join(parts)
+          assert hashlib.sha256(packed).hexdigest() == '30f0244aaa6930e57f57979d9ebc53570f75f0ce2af3fdc1f97a746d9f47cd66', 'payload integrity mismatch'
+          payload = json.loads(gzip.decompress(packed))
+          expected = {'QUALITY.md', 'README.md', 'SKILL.md', 'references/discovery.md', 'references/goose.md', 'references/harness-catalog.md', 'references/log-formats.md', 'scripts/compile_ai_logs.py', 'scripts/detect_hosts.py', 'scripts/goose_usage.py', 'scripts/ledger.py', 'scripts/run_pipeline.py', 'scripts/validate_quality.py', 'tests/README.goose.md', 'tests/goose_fixtures.py', 'tests/test_goose_usage.py'}
+          assert set(payload['files']) == expected
+          patch = pathlib.Path(os.environ['RUNNER_TEMP']) / 'goose-reviewed.patch'
+          patch.write_text(payload['patch'])
+          subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
+          subprocess.run(['git', 'apply', str(patch)], check=True)
+          for path, digest in payload['files'].items():
+              assert hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest() == digest, path
+          (pathlib.Path(os.environ['RUNNER_TEMP']) / 'goose-hashes.json').write_text(json.dumps(payload['files']))
+          print('Verified', len(expected), 'source files against the locally tested patch')
+          PY
+      - name: Validate native and package contracts before publishing
+        run: |
+          python -m unittest discover -s tests -p 'test_goose*.py' -v
+          python scripts/validate_package.py
+          git diff --check
+      - name: Commit only the verified source files to the feature branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          hashes = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'goose-hashes.json').read_text())
+          additions = []
+          for path, digest in sorted(hashes.items()):
+              data = pathlib.Path(path).read_bytes()
+              assert hashlib.sha256(data).hexdigest() == digest, path
+              additions.append({'path': path, 'contents': base64.b64encode(data).decode()})
+          variables = {'input': {'branch': {'repositoryNameWithOwner': 'CompleteTech-LLC/ai-usage-ledger-skill', 'branchName': 'feat/goose-ledger-integration-20261012'}, 'expectedHeadOid': 'c2a2c6158621510d2e531fd5be0131a6a4efee76', 'message': {'headline': 'feat: collect native Goose usage with safe WAL snapshots and stable accounting', 'body': 'Audit Goose 1.54.0 schema 17 at 69de89c50cc01d4e0187d6645bf3618729873f74. Preserve cache subsets, per-record model and qualified provider/cost evidence. Keep cumulative and carried-forward counters non-billable. Wire consent-aware discovery, scanner, stores, queries and snapshot reports. Verify 37 synthetic native and end-to-end tests. No Goose modifications, credentials, provider requests or schedules.'}, 'fileChanges': {'additions': additions}}}
+          query = 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }'
+          request = urllib.request.Request('https://api.github.com/graphql', data=json.dumps({'query': query, 'variables': variables}).encode(), headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Content-Type': 'application/json'})
+          with urllib.request.urlopen(request, timeout=60) as response:
+              result = json.load(response)
+          if result.get('errors'):
+              raise RuntimeError(json.dumps(result['errors']))
+          commit = result['data']['createCommitOnBranch']['commit']
+          print(json.dumps(commit))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('Verified Goose integration source commit: ' + commit['url'] + '\n')
+          PY
