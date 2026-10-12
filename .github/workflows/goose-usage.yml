@@ -26,7 +26,7 @@ jobs:
       - name: Native collector contracts
         run: python -m unittest discover -s tests -p 'test_goose*.py' -v
       - name: Read pinned public Goose sources for schema audit
-        if: runner.os == 'Linux'
+        if: always() && runner.os == 'Linux'
         uses: actions/checkout@v4
         with:
           repository: aaif-goose/goose
@@ -39,14 +39,15 @@ jobs:
             crates/goose-cli
             crates/goose-server
             crates/goose-providers
+            crates/goose-provider-types
             crates/goose-session
             crates/goose-sdk
             documentation/docs/guides
       - name: Archive audited tracked source
-        if: runner.os == 'Linux'
+        if: always() && runner.os == 'Linux'
         run: tar --exclude=.git -czf goose-audit-source.tar.gz upstream-audit
       - uses: actions/upload-artifact@v4
-        if: runner.os == 'Linux'
+        if: always() && runner.os == 'Linux'
         with:
           name: goose-audit-source
           path: goose-audit-source.tar.gz
