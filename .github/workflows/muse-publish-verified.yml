@@ -19,81 +19,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Apply the narrowly scoped reviewed correction
+      - name: Apply the exact locally tested review correction
         run: |
           test "$(git ls-remote origin refs/heads/feat/muse-mesh-usage-mcp-20261012 | cut -f1)" = dc71e142ab6d3ab1794e5ac290992a003268ebc9
           git switch -c muse-completion-review
           python - <<'PY'
-          import hashlib, subprocess
-          from pathlib import Path
-          path = Path('scripts/muse_usage.py')
-          text = path.read_text()
-          old = '                                           "charge_source", "estimated_usage")}'
-          new = '                                           "charge_source", "estimated_usage", "status", "usage_pricing_eligible")}'
-          assert text.count(old) == 1
-          path.write_text(text.replace(old, new))
-          path = Path('tests/test_muse_usage.py')
-          text = path.read_text()
-          needle = '    def test_inflight_marker_is_coverage_not_a_zero_cost_event(self):\n'
-          new = '''    def test_completion_status_change_conflicts_after_ingestion(self):
-              for status in ("interrupted", "failed", "cancelled"):
-                  for reverse in (False, True):
-                      with self.subTest(status=status, reverse=reverse):
-                          original = fixture(status=status)
-                          completed = dict(original, invocation_id=str(uuid.uuid4()), status="completed")
-                          first, second = (completed, original) if reverse else (original, completed)
-                          first, second = (mu.normalize(row, self.source) for row in (first, second))
-                          self.assertEqual(first["request_id"], second["request_id"])
-                          self.assertNotEqual(first["evidence_sha256"], second["evidence_sha256"])
-                          self.assertNotEqual(first["usage_pricing_eligible"], second["usage_pricing_eligible"])
-                          path = str(self.root / (status + str(reverse) + ".sqlite"))
-                          store = ledger_store.Store.open("sqlite", path)
-                          try:
-                              self.assertEqual(store.ingest_verified_events([first]), (1, 0))
-                          finally:
-                              store.close()
-                          store = ledger_store.Store.open("sqlite", path)
-                          try:
-                              extra = mu.normalize(fixture(response_id="d" * 64), self.source)
-                              with self.assertRaisesRegex(ValueError, "conflicting"):
-                                  store.ingest_verified_events([extra, second])
-                              rows = list(store.iter_events())
-                              self.assertEqual(len(rows), 1)
-                              self.assertEqual(rows[0]["status"], first["status"])
-                              self.assertEqual(rows[0]["usage_pricing_eligible"], first["usage_pricing_eligible"])
-                              self.assertEqual(store.ingest_verified_events([first]), (0, 1))
-                          finally:
-                              store.close()
-          
-              def test_completion_status_change_conflicts_in_first_batch(self):
-                  for status in ("interrupted", "failed", "cancelled"):
-                      for reverse in (False, True):
-                          with self.subTest(status=status, reverse=reverse):
-                              original = fixture(status=status)
-                              completed = dict(original, invocation_id=str(uuid.uuid4()), status="completed")
-                              records = [completed, original] if reverse else [original, completed]
-                              path = str(self.root / (status + str(reverse) + ".sqlite"))
-                              store = ledger_store.Store.open("sqlite", path)
-                              try:
-                                  with self.assertRaisesRegex(ValueError, "conflicting"):
-                                      store.ingest_verified_events([mu.normalize(row, self.source) for row in records])
-                                  self.assertEqual(list(store.iter_events()), [])
-                              finally:
-                                  store.close()
-          
-          '''
-          # Align the embedded fixture with the checked-in class indentation.
-          lines = new.splitlines(keepends=True)
-          new = lines[0] + ''.join(line[4:] if line.startswith('    ') else line for line in lines[1:])
-          assert text.count(needle) == 1
-          path.write_text(text.replace(needle, new + needle))
-          path = Path('references/muse-mesh.md')
-          text = path.read_text()
-          old = 'A separate SHA-256 fingerprint binds model, observed counts, input semantics and'
-          assert text.count(old) == 1
-          path.write_text(text.replace(old, 'A separate SHA-256 fingerprint binds completion status, pricing eligibility,\ncapture completeness, model, observed counts, input semantics and'))
-          diff = subprocess.check_output(['git', 'diff', '--', 'scripts/muse_usage.py', 'tests/test_muse_usage.py', 'references/muse-mesh.md'])
-          assert hashlib.sha256(diff).hexdigest() == '326a1f64d61f45aae84642f6c209ba28b7fd296f43a365792a0d7f0a9a21a6c9', 'Review diff mismatch'
+          import base64, hashlib, lzma, subprocess
+          encoded = '/Td6WFoAAATm1rRGAgAhARYAAAB0L+Wj4BRXBfNdADIaSQnC/BF9UN4KT0fY9c7BiSMiwh7OxrVjty0cSTyPAGRKVP7unWYpwHPSaBvnjqgHZng/Y/IsOpV6yAOqUdFL31zqsgKY9IK9kFq5+CkuA/Wj/rtcqSmkoDj+A5xwaxUCSKOPtmVBvy+B9uoYtqjzExuhzTvYZcq3EcqYEpRfCnanQo084IX8uax44cXbhMHxK715jMHvhfx807MU/48O85Bri20kwTWYUufISWMPmstqikJweo7sMxGqqe2GEM+4ipNTh1GHPN8Zvu9jHc5a4AS8NVR8KVTG3Y6CPA7GRi33lVMpcmEfiRstlXsv9gjNj7aW0uJ2sQaErGt57RBY7R1FiABOrlsTZ8QDwFxBWdoFQHwqKgTKIyOzriuqSw8eFF/rvUyGm8ipN8X49m0X8lPzwmSw/FOtngm9N+C2ZAEZOgdBCPEhiao9NuVsAHVybSOzY17IjjWPv9VdcEwJdnoKdf4ETwzPi8WD4iqqqziK+q69nH19oFC1LOKrBKU2ZU+qTKmWZ5DUtf7HY2pyNyTTWGA/N76krqszHZ4gcltsVidhNwzRjT9TYY+9v6if19Kf4TOMG9sYFdVRoHwjPtzTCY6EAWkITp6OqJnFP9Vm0GM7cuAxMQgoC2KXIVmjRbVM0sg7sQW6eSmAooXChl0BtDfDHuiebGT1AZemGokWGj2Wr9qq64I1l9KvLTWREWGXJ+iF7ojGJ1cjvsLtKH+Vqoco+qpSo0BOKQ0YD9itFMDu7g2CCuQico/nFMqFy3/9J8gUobeSh2gwstNFEsEcQEKI+Tj1MX4S0IergbffB58nCzjMbpcS6YERNEMXsBR9BPo/KONOrP1DCluJP/pKiYb0Mk5QD8ksfrYF8rwov7BoAE0pCxl6mxSe7ggHKQbDORv79Mtndn1yXwyDjIBLA/ah/1tyspLutMq/uDV2E/gH4fuPGZg7CaDYy9xYSVajYv8CE+uFI60Iu79PrGCemfrMpv34NFSGxhq3Tv+cahALuEJQRRr7zsoK90Kj2koZrGH+0+eHao8ZBpnD6P6wjAWWGiYgc83LXtV7FA/qKgwXrri9nkzR3d/ZknhzCL9AMwGHPvj3Sn1+Wilovi6+K1X+7pJgzFV9m9bgG4Dl2Mn5SMyACxWEoftXVtvH2lAAfVgtWI6wBHnxFfnH1TfH75OLO+bqLOIKtE1EkuKgBFC/dxUZtJdeLpGa47tPRn9hCaNINfpqiK1DNA7vH8ewRBPqQTMb6d6AsdhrWDOQE1hSwYUpXj7kQoOhDekN4kc4E/khvP96+TRbqk+ZKupO+ZcUDdF7hf4geJjFeZK4jGfRERYJ7c4N3qmn6f4G+6NTZTSlsaxwM9znix/0XRop7iNaQei396eahiWG5Jci/E7XjAhyPlGMV7cGmwBBpI79sVA/wUERLlQT/T9McgXRxCIMLq/PaO4sNQOcAdFrUY/soo16f8lbXTQYEvIwHAQroIWdgup20P4x+P4OrqsrNoAOSwQbGA8zMImxj3jBvkiB0SozkGsh/uRc77GuzbvoA91OwJTXlLoQeclkFb+SsptGQnXhBHLRBMqyo5kui20eRDaMRWU2B/PqbjI5gEgxe7ko5n4nFITzMRlO1/xLYf8CLsp0EnfQqLt9x6QzhifjEyX1MKF7M9Y9OUylcWmVyEA64alO3z9InG9p77PjaBQoTYo+tCvH4Gwl2t2pQSjqXbVSBazCEMIq4WsYWRPcQ8ROXa5oz36VRmh8RbGa8IjS5+jThTmNaHTNM26hqLixeMmiLCenfVmopKdW1pNySEY0T0KSBDTQluFU3Uj1Gxijff2FQPW1IQX4eScy29G/7z7TRrQ7xepWYFCSNIi8TQfXNyaVkrGqCzaXbKYDrZuRhiAIFudtY6jzPq6ZoP+zTTlmbTFlVYknATutOdLladQQdZjmZzw2+w6vJGIBb/jWYkDAUPC6OfLnLgi3RmZ+jcYZd5SuU/t/Y/WlLxaHyONfAlQBO9+Od1ZqfeRefpgrwSN6Rcmtrsxqn5DwAAApOY5mkM93+wABjwzYKAAA/xn9PLHEZ/sCAAAAAARZWg=='
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '326a1f64d61f45aae84642f6c209ba28b7fd296f43a365792a0d7f0a9a21a6c9'
+          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
           assert set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines()) == {'scripts/muse_usage.py', 'tests/test_muse_usage.py', 'references/muse-mesh.md'}
           PY
       - name: Test before publishing the correction
