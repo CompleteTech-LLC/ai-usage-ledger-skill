@@ -1,0 +1,61 @@
+name: Goose compiler import correction
+on:
+  push:
+    branches: [chore/goose-source-delivery-20261012]
+    paths: [.github/workflows/goose-import-fix.yml]
+permissions:
+  contents: write
+jobs:
+  correct:
+    if: github.repository == 'CompleteTech-LLC/ai-usage-ledger-skill' && github.ref == 'refs/heads/chore/goose-source-delivery-20261012'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8c42d1a26e23e894e40609f9ae1aaeceb3cc14d0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply the exact locally verified import-order correction
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/compile_ai_logs.py')
+          s = p.read_text()
+          assert s.count('import goose_usage\n') == 1
+          assert s.count('    _safety = None\n') == 1
+          s = s.replace('import goose_usage\n', '')
+          s = s.replace('    _safety = None\n', '    _safety = None\n\nimport goose_usage  # noqa: E402 -- resolve sibling modules for importlib callers too\n')
+          p.write_text(s)
+          PY
+          git add scripts/compile_ai_logs.py
+          git diff --cached --check
+          test "$(git write-tree)" = a3023b42f1967ed916a10029a96c58a230fa4d5d
+      - name: Verify standalone pricing imports and both integrations
+        run: |
+          python -m pip install ruff
+          ruff check scripts tests
+          python -m unittest discover -s tests -p 'test_pricing.py' -v
+          python -m unittest discover -s tests -p 'test_scoped_report.py' -v
+          python -m unittest discover -s tests -p 'test_goose*.py' -v
+          python -m unittest discover -s tests -p 'test_package_*.py' -v
+          python scripts/validate_package.py
+      - name: Publish only the checked compiler file with an exact head lease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import base64, json, os, pathlib, subprocess, urllib.request
+          assert subprocess.check_output(['git', 'write-tree'], text=True).strip() == 'a3023b42f1967ed916a10029a96c58a230fa4d5d'
+          name = 'scripts/compile_ai_logs.py'
+          variables = {'input': {'branch': {'repositoryNameWithOwner': 'CompleteTech-LLC/ai-usage-ledger-skill', 'branchName': 'feat/goose-ledger-integration-20261012'}, 'expectedHeadOid': '8c42d1a26e23e894e40609f9ae1aaeceb3cc14d0', 'message': {'headline': 'fix: resolve native Goose imports for standalone pricing callers'}, 'fileChanges': {'additions': [{'path': name, 'contents': base64.b64encode(pathlib.Path(name).read_bytes()).decode()}]}}}
+          query = 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }'
+          req = urllib.request.Request('https://api.github.com/graphql', data=json.dumps({'query': query, 'variables': variables}).encode(), headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Content-Type': 'application/json'})
+          with urllib.request.urlopen(req, timeout=60) as response:
+              result = json.load(response)
+          if result.get('errors'):
+              raise RuntimeError(json.dumps(result['errors']))
+          print(json.dumps(result['data']))
+          PY
