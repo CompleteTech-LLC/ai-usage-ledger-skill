@@ -1,0 +1,36 @@
+name: Goose post-merge verification
+on:
+  push:
+    branches: [chore/goose-source-delivery-20261012]
+    paths: [.github/workflows/goose-postmerge-verification.yml]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify merged tree and both integrations
+        run: |
+          test "$(git rev-parse HEAD)" = 05849f9dd595af420dddb2f4b1cf39b88dbf67b9
+          test "$(git rev-parse HEAD^{tree})" = 736f7648e65382a02a7300654cf33cb5c9caf0fc
+          python -m unittest discover -s tests -p 'test_goose*.py' -v
+          python -m unittest discover -s tests -p 'test_package_*.py' -v
+          python scripts/validate_package.py
+          git diff --exit-code
+          git bundle create "$RUNNER_TEMP/goose-verified-main.bundle" refs/remotes/origin/main
+          git log -1 --format='%H%n%T%n%s'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: goose-verified-main
+          path: ${{ runner.temp }}/goose-verified-main.bundle
+          retention-days: 7
+          if-no-files-found: error
