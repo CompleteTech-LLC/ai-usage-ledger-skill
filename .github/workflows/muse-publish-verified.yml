@@ -18,7 +18,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
-          ref: 4948b232daf24c20669cd82f98d3656ffcb130dd
+          ref: 05849f9dd595af420dddb2f4b1cf39b88dbf67b9
           path: delivery
           fetch-depth: 0
       - uses: actions/setup-python@v5
@@ -46,7 +46,7 @@ jobs:
       - name: Apply only the authorized integration paths to the current base
         working-directory: delivery
         run: |
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = 4948b232daf24c20669cd82f98d3656ffcb130dd
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = 05849f9dd595af420dddb2f4b1cf39b88dbf67b9
           git switch -c feat/muse-mesh-usage-mcp-20261012
           git apply --check ../evidence/ledger-implementation.patch
           git apply --index ../evidence/ledger-implementation.patch
@@ -65,6 +65,11 @@ jobs:
           assert changed == allowed, changed ^ allowed
           assert hashlib.sha256(Path('integrations/muse-mesh/mu.patch.txt').read_bytes()).hexdigest() == 'da5b76b047ad7ccc3cbd369b6de55d6dd587f1317f597cc66a96636197ab0655'
           print('Validated', len(changed), 'authorized changed paths')
+          path = Path('references/muse-mesh.md')
+          text = path.read_text()
+          text = text.replace('4948b232daf24c20669cd82f98d3656ffcb130dd', '05849f9dd595af420dddb2f4b1cf39b88dbf67b9')
+          path.write_text(text)
+          subprocess.run(['git', 'add', str(path)], check=True)
           PY
       - name: Verify integration and inherited package contracts before publication
         working-directory: delivery
